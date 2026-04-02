@@ -1154,10 +1154,10 @@ app.post("/v1/messages", authMiddleware, async (req, res) => {
   }
 
   // Map claude-* model names to a Z.AI model
-  // glm-4.7 is the default capable model; glm-5 for "opus"-level requests
+  // glm-5 is the default capable model; glm-5-turbo for "opus"-level requests
   const zaiModel = (() => {
     const m = (model || "").toLowerCase();
-    if (m.includes("opus"))   return "glm-5";
+    if (m.includes("opus"))   return "GLM-5-Turbo";
     if (m.includes("haiku"))  return "glm-5";
     return "glm-5"; // sonnet and everything else
   })();
@@ -1335,7 +1335,7 @@ app.post("/v1/messages", authMiddleware, async (req, res) => {
 // ============================================================
 
 const knownModels = [
-  "glm-4.7", "glm-5", "z1", "z1-mini",
+  "glm-4.7", "glm-5", "GLM-5-Turbo", "z1", "z1-mini",
   // Also advertise Anthropic model names so Claude Code's model probe passes
   "claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001",
 ];
