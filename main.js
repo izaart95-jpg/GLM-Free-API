@@ -1041,19 +1041,22 @@ const getDashboardHTML = (host) => `<!DOCTYPE html>
         <div class="code-block">
           <code># Windows PowerShell
 $env:ANTHROPIC_BASE_URL="http://localhost:${config.server.port}"
-$env:ANTHROPIC_API_KEY="${config.auth.token}"
+$env:ANTHROPIC_AUTH_TOKEN="${config.auth.token}"
+$env:ANTHROPIC_API_KEY=""
 claude
 
 # Windows CMD
 set ANTHROPIC_BASE_URL=http://localhost:${config.server.port}
-set ANTHROPIC_API_KEY=${config.auth.token}
+set ANTHROPIC_AUTH_TOKEN=${config.auth.token}
+set ANTHROPIC_API_KEY=""
 claude
 
 # Permanent — add to ~/.claude/settings.json:
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:${config.server.port}",
-    "ANTHROPIC_API_KEY": "${config.auth.token}"
+    "ANTHROPIC_AUTH_TOKEN": "${config.auth.token}",
+    "ANTHROPIC_API_KEY": ""
   }
 }</code>
         </div>
