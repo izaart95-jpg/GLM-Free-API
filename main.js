@@ -1543,14 +1543,14 @@ server.listen(config.server.port, config.server.host, async () => {
 ║  Dashboard:     http://localhost:${config.server.port}                      ║
 ╠═══════════════════════════════════════════════════════════════╣
 ║  Anthropic API: http://localhost:${config.server.port}/v1/messages          ║
-║  OpenAI API:    http://localhost:${config.server.port}/v1/chat/completions ║
+║  OpenAI API:    http://localhost:${config.server.port}/v1/chat/completions  ║
 ╠═══════════════════════════════════════════════════════════════╣
-║  Auth Token:    ${config.auth.token.padEnd(44)}                          ║
+║  Auth Token:    ${config.auth.token.padEnd(44)}║
 ╠═══════════════════════════════════════════════════════════════╣
-║  Claude Code (no LiteLLM needed):                                        ║
-║  set ANTHROPIC_BASE_URL=http://localhost:${config.server.port}           ║
-║  set ANTHROPIC_AUTH_TOKEN=${config.auth.token.padEnd(39)}                ║
-║  set ANTHROPIC_API_KEY=""                                                ║
+║  Claude Code (no LiteLLM needed):                             ║
+║  set ANTHROPIC_BASE_URL=http://localhost:${config.server.port}              ║
+║  set ANTHROPIC_AUTH_TOKEN=${config.auth.token.padEnd(39)}║
+║  set ANTHROPIC_API_KEY=""    ║ 
 ║ claude                                                                   ║
 ╚═══════════════════════════════════════════════════════════════╝
 `);
