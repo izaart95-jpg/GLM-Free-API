@@ -290,7 +290,7 @@ In your Roo Code or Kilo Code settings, configure:
 |---------|-------|
 | **API Base URL** | `http://localhost:3001/v1` |
 | **API Key** | `Waguri` |
-| **Model** | `glm-4.7`, `z1`, or `z1-mini` |
+| **Model** | `glm-4.7`, `glm-5`, or `GLM-5-Turbo` |
 
 ---
 
@@ -301,7 +301,7 @@ In your Roo Code or Kilo Code settings, configure:
 | `glm-5` | Default model (Direct mode) |
 | `GLM-5-Turbo` | GLM 5 Turbo for complex tasks *(new)* |
 | `GLM-5v-Turbo` | GLM 5V Turbo *(new)* |
-
+| `glm-4.7` | GLM 4.7 good for fast tasks |
 ---
 
 ## Architecture
