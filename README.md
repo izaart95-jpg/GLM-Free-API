@@ -163,7 +163,6 @@ curl http://localhost:3001/v1/chat/completions \
   -d '{
     "model": "glm-4.7",
     "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
       {"role": "user", "content": "What is 2+2?"}
     ]
   }'
@@ -299,10 +298,9 @@ In your Roo Code or Kilo Code settings, configure:
 
 | Model | Description |
 |-------|-------------|
-| `glm-4.7` | Default model (Direct mode) |
-| `glm-z1` | GLM Z1 — Z.AI main model |
-| `glm-z1-mini` | GLM Z1 Mini — Z.AI lightweight model |
-| `glm-5v-turbo` | GLM 5V Turbo *(new)* |
+| `glm-5` | Default model (Direct mode) |
+| `GLM-5-Turbo` | GLM 5 Turbo for complex tasks *(new)* |
+| `GLM-5v-Turbo` | GLM 5V Turbo *(new)* |
 
 ---
 
