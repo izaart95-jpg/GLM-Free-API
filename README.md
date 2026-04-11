@@ -24,6 +24,7 @@
 - **Claude Code** integration added (no LiteLLM required)
 - **Tool call parse toggle** — choose between parsed `tool_use` blocks or raw passthrough
 - **Core instructions toggle** — optionally inject Roo/Cline XML tool format hints into every prompt
+- **Debug mode added** - log exact request body sent to z.ai through proxy
 
 ---
 
