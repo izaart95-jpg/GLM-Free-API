@@ -1,6 +1,6 @@
 # Z.AI Proxy API
 
-> OpenAI-compatible API proxy for [chat.z.ai](https://chat.z.ai) — available in two modes.
+> OpenAI & Anthropic-compatible API proxy for [chat.z.ai](https://chat.z.ai) — available in two modes.
 
 ---
 
@@ -19,21 +19,22 @@
 ## What's New
 
 - **GLM 5V Turbo** model added
-- **Anthropic API** support added
-- **Claude Code** Integration added
+- **Anthropic API** (`/v1/messages`) support added — native SSE streaming.
+- **Claude Code** integration added (no LiteLLM required)
+- **Tool call parse toggle** — choose between parsed `tool_use` blocks or raw passthrough
+- **Core instructions toggle** — optionally inject Roo/Cline XML tool format hints into every prompt
 
 ---
 
 ## Features
 
 - **OpenAI-Compatible API** — Drop-in replacement for the OpenAI API
-- **Streaming Support** — Real-time SSE streaming responses
+- **Anthropic-Compatible API** — Native `/v1/messages` endpoint for Claude Code and Anthropic SDK
+- **Streaming Support** — Real-time SSE streaming responses (both formats)
 - **Tool Call Parsing** — Full support for Roo Code / Kilo Code XML tool format
 - **Session Management** — Fresh session support via `X-Fresh-Session` header
 - **Feature Toggles** — Web search, deep thinking, image generation, preview mode
 - **Auto Session Recovery** — Re-authenticates automatically on token expiry *(Direct mode)*
-- **Client Pool** — Multiple browser clients with LRU / round-robin / random rotation *(Browser mode)*
-- **Rate Limit Handling** — Automatic cooldown and recovery *(Browser mode)*
 
 ---
 
@@ -81,18 +82,106 @@ document.head.appendChild(script);
 
 ---
 
-## Making API Requests
+## Claude Code Integration (No LiteLLM Required)
 
-```bash
-curl http://localhost:3001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer Waguri" \
-  -d '{"model":"glm-4.7","messages":[{"role":"user","content":"Hello!"}]}'
+The server exposes a native Anthropic-compatible `/v1/messages` endpoint. Point Claude Code directly at it.
+
+### Windows PowerShell
+
+```powershell
+$env:ANTHROPIC_BASE_URL = "http://localhost:3001"
+$env:ANTHROPIC_AUTH_TOKEN = "Waguri"
+$env:ANTHROPIC_API_KEY = ""
+claude
 ```
+
+### Windows CMD
+
+```cmd
+set ANTHROPIC_BASE_URL=http://localhost:3001
+set ANTHROPIC_AUTH_TOKEN=Waguri
+set ANTHROPIC_API_KEY=
+claude
+```
+
+### Permanent — `~/.claude/settings.json`
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:3001",
+    "ANTHROPIC_AUTH_TOKEN": "Waguri",
+    "ANTHROPIC_API_KEY": ""
+  }
+}
+```
+
+Claude model names are mapped to Z.AI models automatically:
+
+| Claude Model | Z.AI Model Used |
+|---|---|
+| `claude-opus-*` | `GLM-5-Turbo` |
+| `claude-sonnet-*` | `glm-5` |
+| `claude-haiku-*` | `glm-5` |
 
 ---
 
 ## API Reference
+
+### Anthropic-Compatible Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/messages` | `POST` | Native Anthropic Messages API — streaming SSE + `tool_use` blocks |
+| `/v1/models` | `GET` | List models (returns Anthropic-style model IDs) |
+
+#### Example — Non-Streaming
+
+```bash
+curl -X POST http://localhost:3001/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: Waguri" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 100,
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+#### Example — Streaming
+
+```bash
+curl -X POST http://localhost:3001/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: Waguri" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 500,
+    "stream": true,
+    "messages": [{"role": "user", "content": "Say hi"}]
+  }'
+```
+
+#### Supported Request Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model` | string | Any Claude model name (mapped to GLM internally) |
+| `messages` | array | Anthropic messages format — `user` / `assistant` turns |
+| `system` | string \| array | System prompt (string or content block array) |
+| `stream` | boolean | Enable SSE streaming |
+| `max_tokens` | number | Accepted, not forwarded |
+| `tools` | array | Accepted — tool definitions are injected into the prompt |
+| `tool_choice` | object | Accepted, ignored |
+| `temperature` | number | Accepted, ignored |
+
+#### Response Format
+
+Non-streaming returns a standard Anthropic message object with `content` blocks of type `text` and (when detected) `tool_use`. The `stop_reason` is `"tool_use"` when tool calls are present, otherwise `"end_turn"`.
+
+---
 
 ### OpenAI-Compatible Endpoints
 
@@ -119,8 +208,6 @@ curl http://localhost:3001/v1/chat/completions \
 | `/admin/clients` | `GET` | List clients / session info | Both |
 | `/admin/session/clear` | `POST` | Clear conversation history and generate new `chatId` | Direct |
 | `/admin/clients/:id/clear` | `POST` | Clear client chat history | Both |
-| `/admin/clients/:id` | `DELETE` | Disconnect a browser client | Browser |
-| `/admin/queue` | `GET` | Request queue status | Browser |
 | `/stop` | `POST` | Stop current generation | Both |
 | `/inject.js` | `GET` | Browser injection script | Browser |
 
@@ -128,7 +215,9 @@ curl http://localhost:3001/v1/chat/completions \
 
 ## Configuration
 
-Configure via environment variables or `config.js`:
+Configure via environment variables or `config.js`.
+
+### Server & Auth
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -136,14 +225,40 @@ Configure via environment variables or `config.js`:
 | `HOST` | `0.0.0.0` | Server host |
 | `AUTH_TOKEN` | `Waguri` | API authentication token |
 | `TIMEOUT` | `120000` | Default request timeout (ms) |
-| `ROTATION_STRATEGY` | `lru` | Client rotation strategy: `lru`, `round-robin`, `random` *(Browser mode)* |
-| `RATE_LIMIT_COOLDOWN` | `300000` | Rate limit cooldown in ms *(Browser mode)* |
-| `QUEUE_MAX_SIZE` | `100` | Max queued requests *(Browser mode)* |
-| `QUEUE_MAX_WAIT` | `60000` | Max queue wait time in ms *(Browser mode)* |
 
-### Handling Timeout Errors
+### Behavior Toggles (in `main.js`)
 
-If you're experiencing timeout issues, increase these values:
+These are constants at the top of `main.js` you can flip before starting the server:
+
+```js
+// ============== Z.AI DIRECT CONFIG ==============
+
+const PARSE_TOOL_CALLS     = true;   // true  → parse XML/JSON tool calls into tool_use blocks
+                                      // false → pass raw model output through unchanged
+
+const INCLUDE_CORE_INSTRUCTIONS = false; // true  → prepend Roo/Cline XML tool format hints to every prompt
+                                          // false → send prompts as-is (default)
+```
+
+#### `PARSE_TOOL_CALLS`
+
+| Value | Behavior |
+|-------|----------|
+| `true` (default) | XML / JSON tool call syntax in the model's response is detected, parsed, and returned as proper `tool_use` content blocks (Anthropic format) or `tool_calls` (OpenAI format). Raw tool syntax is stripped from the `text` block. |
+| `false` | The model's raw output is returned as-is inside a single `text` block. Useful if you want to handle tool call parsing yourself, or if the model's native output format is preferred. |
+
+#### `INCLUDE_CORE_INSTRUCTIONS`
+
+| Value | Behavior |
+|-------|----------|
+| `false` (default) | Prompts are forwarded to Z.AI without modification. |
+| `true` | A block of critical instructions is prepended to every prompt, telling the model to emit tool calls in the XML format expected by Roo Code / Kilo Code. Enable this if tool calls are not being emitted correctly. |
+
+---
+
+### Timeout Handling
+
+If you experience timeout issues, increase these values:
 
 ```bash
 export TIMEOUT=300000                  # 5 minutes
@@ -154,7 +269,7 @@ export STREAMING_CHUNK_TIMEOUT=120000  # 2 minutes
 
 ## Usage Examples
 
-### Basic Chat Completion
+### Basic Chat Completion (OpenAI)
 
 ```bash
 curl http://localhost:3001/v1/chat/completions \
@@ -162,13 +277,11 @@ curl http://localhost:3001/v1/chat/completions \
   -H "Authorization: Bearer Waguri" \
   -d '{
     "model": "glm-4.7",
-    "messages": [
-      {"role": "user", "content": "What is 2+2?"}
-    ]
+    "messages": [{"role": "user", "content": "What is 2+2?"}]
   }'
 ```
 
-### Streaming Response
+### Streaming Response (OpenAI)
 
 ```bash
 curl http://localhost:3001/v1/chat/completions \
@@ -240,7 +353,7 @@ curl http://localhost:3001/prompt \
 
 ## Tool Call Support
 
-Roo Code / Kilo Code XML tool calls are parsed automatically. Works in both modes.
+Roo Code / Kilo Code XML tool calls are parsed automatically when `PARSE_TOOL_CALLS = true` (default). Works in both OpenAI and Anthropic endpoint modes.
 
 ### Supported Formats
 
@@ -299,9 +412,13 @@ In your Roo Code or Kilo Code settings, configure:
 | Model | Description |
 |-------|-------------|
 | `glm-5` | Default model (Direct mode) |
-| `GLM-5-Turbo` | GLM 5 Turbo for complex tasks *(new)* |
-| `GLM-5v-Turbo` | GLM 5V Turbo *(new)* |
-| `glm-4.7` | GLM 4.7 good for fast tasks |
+| `GLM-5-Turbo` | GLM 5 Turbo for complex tasks |
+| `GLM-5v-Turbo` | GLM 5V Turbo (vision) |
+| `glm-4.7` | GLM 4.7 — good for fast tasks |
+| `claude-sonnet-4-6` | Alias → `glm-5` (for Claude Code) |
+| `claude-opus-4-6` | Alias → `GLM-5-Turbo` (for Claude Code) |
+| `claude-haiku-4-5-*` | Alias → `glm-5` (for Claude Code) |
+
 ---
 
 ## Architecture
@@ -309,10 +426,11 @@ In your Roo Code or Kilo Code settings, configure:
 ### Direct HTTP Mode (`main.js`)
 
 ```
-┌─────────────┐     ┌──────────────────────┐     ┌─────────────────┐
-│  API Client │────▶│  main.js             │────▶│  chat.z.ai      │
-│  (Roo/curl) │     │  HMAC-signed HTTP    │     │  REST API       │
-└─────────────┘     └──────────────────────┘     └─────────────────┘
+┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
+│  API Client     │────▶│  main.js             │────▶│  chat.z.ai      │
+│  (Claude Code,  │     │  HMAC-signed HTTP    │     │  REST API       │
+│   Roo, curl)    │     │  OpenAI + Anthropic  │     │                 │
+└─────────────────┘     └──────────────────────┘     └─────────────────┘
 ```
 
 ### Browser Automation Mode (`browser.js`)
