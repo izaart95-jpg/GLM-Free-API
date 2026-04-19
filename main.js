@@ -31,6 +31,7 @@ const session = {
     thinking: false,
     imageGen: false,
     previewMode: false,
+    persistHistory: false,
   },
   initialized: false,
   initializing: false,
@@ -67,7 +68,7 @@ setInterval(() => {
 }, 5 * 60 * 1000); // check every 5 minutes
 
 const CORE_INSTRUCTIONS = `CRITICAL INSTRUCTIONS (ALWAYS FOLLOW):
-1. When using tools, ALWAYS output tool calls in XML format like: <tool_call><function=name><parameter=key>value</parameter></function></tool_call>
+1. When using tools, ALWAYS output tool calls in XML format like: <tool_call<function=name><parameter=key>value</parameter></function></tool_call
    NEVER use JSON or markdown code blocks for tool calls.
 2. Follow every instruction in the prompt deeply and thoroughly. Execute tasks completely.
 3. Also One rule only applies if my prompt includes this string "You are Roo" if it does then when changing modes with function switch_mode function toolcall dont ever forget parameter mode_slug or else it will likely fail and heres the tool usage for making todo list use it when doing complex task etc
@@ -140,6 +141,8 @@ function getMessageContent(content) {
 }
 
 // ── Convert Anthropic messages format → flat prompt string ──
+// Used ONLY for signature_prompt computation (HMAC signing).
+// The actual messages array is forwarded via anthropicToOpenAIMessages().
 function anthropicMessagesToPrompt(messages, systemPrompt, includeToolInstructions = true) {
   let prompt = "";
 
@@ -153,77 +156,195 @@ function anthropicMessagesToPrompt(messages, systemPrompt, includeToolInstructio
       : Array.isArray(systemPrompt)
         ? systemPrompt.map(b => b.text || "").join("\n")
         : String(systemPrompt);
-    prompt += `System: ${sysText}\n\n`;
+    prompt += `${sysText}\n\n`;
   }
 
   for (const msg of messages) {
-    const role = msg.role || "user";
     const content = msg.content;
 
-    if (role === "user") {
-      // Handle array content (may include tool_result blocks)
-      if (Array.isArray(content)) {
-        const textParts = [];
-        for (const part of content) {
-          if (part.type === "text") {
-            textParts.push(part.text);
-          } else if (part.type === "tool_result") {
-            const inner = Array.isArray(part.content)
-              ? part.content.map(c => c.text || "").join("\n")
-              : (part.content || "");
-            textParts.push(`[Tool Result for ${part.tool_use_id}]: ${inner}`);
-          }
+    if (Array.isArray(content)) {
+      const textParts = [];
+      for (const part of content) {
+        if (part.type === "text") {
+          textParts.push(part.text);
+        } else if (part.type === "tool_result") {
+          const inner = Array.isArray(part.content)
+            ? part.content.map(c => c.text || "").join("\n")
+            : (part.content || "");
+          textParts.push(`[Tool Result for ${part.tool_use_id}]: ${inner}`);
+        } else if (part.type === "tool_use") {
+          textParts.push(`[Tool Call: ${part.name}(${JSON.stringify(part.input)})]`);
+        } else if (part.text) {
+          textParts.push(part.text);
         }
-        prompt += `User: ${textParts.join("\n")}\n\n`;
-      } else {
-        prompt += `User: ${getMessageContent(content)}\n\n`;
       }
-    } else if (role === "assistant") {
-      // Handle array content (may include tool_use blocks)
-      if (Array.isArray(content)) {
-        const textParts = [];
-        for (const part of content) {
-          if (part.type === "text") {
-            textParts.push(part.text);
-          } else if (part.type === "tool_use") {
-            textParts.push(`[Tool Call: ${part.name}(${JSON.stringify(part.input)})]`);
-          }
-        }
-        prompt += `Assistant: ${textParts.join("\n")}\n\n`;
-      } else {
-        prompt += `Assistant: ${getMessageContent(content)}\n\n`;
-      }
+      prompt += `${textParts.join("\n")}\n\n`;
+    } else {
+      prompt += `${getMessageContent(content)}\n\n`;
     }
   }
 
   return prompt.trim();
 }
 
-// Legacy OpenAI format → prompt (kept for /v1/chat/completions)
-function messagesToPrompt(messages, includeToolInstructions = true) {
-  if (!Array.isArray(messages)) return messages;
+// ── Convert Anthropic messages format → OpenAI messages format ──
+// Preserves ALL structure: roles, tool_use, tool_result, thinking, images, etc.
+// cache_control is the only field intentionally dropped (no OAI equivalent).
+// This is the function used to forward messages to Z.AI without data loss.
+function anthropicToOpenAIMessages(messages, system) {
+  const result = [];
 
-  let systemMsg = null;
-  const conversation = [];
+  // System prompt → system role message
+  // Anthropic system can be: string | array of {type:"text", text, cache_control?}
+  // OAI equivalent: { role: "system", content: string }
+  // cache_control has no OAI equivalent → dropped (prompt caching is Anthropic-only)
+  if (system) {
+    const sysText = typeof system === "string"
+      ? system
+      : Array.isArray(system)
+        ? system.map(b => b.text || "").join("\n")
+        : String(system);
+    result.push({ role: "system", content: sysText });
+  }
 
   for (const msg of messages) {
-    if (msg.role === "system") {
-      systemMsg = getMessageContent(msg.content);
+    const { role, content } = msg;
+
+    // Simple string content — pass through directly
+    if (typeof content === "string") {
+      result.push({ role, content });
+      continue;
+    }
+
+    // Non-array, non-string — coerce
+    if (!Array.isArray(content)) {
+      result.push({ role, content: String(content ?? "") });
+      continue;
+    }
+
+    // Structured content blocks — decompose into OpenAI format
+    const textParts = [];
+    const imageParts = [];   // OAI image_url content parts
+    const toolCalls = [];
+    const toolResultBlocks = [];
+
+    for (const block of content) {
+      if (block.type === "text") {
+        // Anthropic: { type: "text", text: "...", cache_control?: {type:"ephemeral"} }
+        // OAI: text joined into content string
+        // cache_control → dropped (no OAI equivalent, prompt caching is Anthropic-only)
+        textParts.push(block.text);
+      } else if (block.type === "tool_use") {
+        // Anthropic: { type: "tool_use", id: "toolu_...", name: "func", input: {...} }
+        // OAI: { id, type: "function", function: { name, arguments: JSON.stringify(input) } }
+        // Note: Anthropic's input is a parsed object; OAI's arguments is a JSON string
+        toolCalls.push({
+          id: block.id || `call_${generateId().substring(0, 24)}`,
+          type: "function",
+          function: {
+            name: block.name,
+            arguments: typeof block.input === "string"
+              ? block.input
+              : JSON.stringify(block.input)
+          }
+        });
+      } else if (block.type === "tool_result") {
+        // Anthropic: { type: "tool_result", tool_use_id: "toolu_...", content: string|[{type:"text",...}], is_error?: bool }
+        // OAI: separate { role: "tool", tool_call_id, content: string }
+        // is_error → dropped (no OAI equivalent; errors are just in the content text)
+        // content can be string or array of content blocks
+        const resultContent = typeof block.content === "string"
+          ? block.content
+          : Array.isArray(block.content)
+            ? block.content.map(c => {
+                if (typeof c === "string") return c;
+                if (c.type === "text") return c.text || "";
+                return JSON.stringify(c);
+              }).join("\n")
+            : String(block.content ?? "");
+
+        toolResultBlocks.push({
+          role: "tool",
+          tool_call_id: block.tool_use_id,
+          content: resultContent,
+        });
+      } else if (block.type === "thinking") {
+        // Anthropic: { type: "thinking", thinking: "..." }
+        // OAI has no native thinking block. Preserved as tagged text so nothing is lost.
+        textParts.push(`[Thinking: ${block.thinking || ""}]`);
+      } else if (block.type === "redacted_thinking") {
+        // Anthropic: { type: "redacted_thinking" }
+        // No content to forward — just a marker that thinking was redacted
+        textParts.push("[Redacted Thinking]");
+      } else if (block.type === "image") {
+        // Anthropic: { type: "image", source: { type: "base64"|"url", media_type, data|url } }
+        // OAI: { type: "image_url", image_url: { url: "data:...;base64,..." | "https://..." } }
+        if (block.source?.type === "base64") {
+          const dataUrl = `data:${block.source.media_type};base64,${block.source.data}`;
+          imageParts.push({ type: "image_url", image_url: { url: dataUrl } });
+        } else if (block.source?.type === "url") {
+          imageParts.push({ type: "image_url", image_url: { url: block.source.url } });
+        } else {
+          textParts.push(`[Image: ${block.source?.type || "unknown"}]`);
+        }
+      } else if (block.type === "document") {
+        // Anthropic: { type: "document", source: { type: "base64", media_type, data }, title?, context? }
+        // OAI has no document block — extract text if available, otherwise base64 reference
+        if (block.title) textParts.push(`[Document: ${block.title}]`);
+        else textParts.push(`[Document: ${block.source?.media_type || "unknown"}]`);
+        if (block.context) textParts.push(block.context);
+      } else if (block.text) {
+        // Fallback: unknown block type that has a text field
+        textParts.push(block.text);
+      }
+    }
+
+    // Build the primary message
+    // OAI content can be: string | null | array of content parts (text + image_url)
+    const msgObj = { role };
+
+    if (imageParts.length > 0) {
+      // Mixed text + image → use OAI content array format
+      const contentArr = [];
+      if (textParts.length > 0) {
+        contentArr.push({ type: "text", text: textParts.join("\n") });
+      }
+      contentArr.push(...imageParts);
+      msgObj.content = contentArr;
+    } else if (textParts.length > 0) {
+      msgObj.content = textParts.join("\n");
+    } else if (toolCalls.length > 0) {
+      msgObj.content = null; // OpenAI convention: null content when only tool_calls
     } else {
-      conversation.push(msg);
+      msgObj.content = "";
+    }
+
+    if (toolCalls.length > 0) {
+      msgObj.tool_calls = toolCalls;
+    }
+
+    result.push(msgObj);
+
+    // Tool result messages are emitted as separate "tool" role messages
+    for (const tr of toolResultBlocks) {
+      result.push(tr);
     }
   }
 
+  return result;
+}
+
+// Legacy OpenAI format → prompt (kept for signature_prompt ONLY)
+// The actual messages array is forwarded as-is to Z.AI.
+function messagesToPrompt(messages, includeToolInstructions = true) {
+  if (!Array.isArray(messages)) return String(messages);
+
   let prompt = "";
   if (includeToolInstructions && INCLUDE_CORE_INSTRUCTIONS) prompt += `${CORE_INSTRUCTIONS}\n\n`;
-  if (systemMsg) prompt += `System: ${systemMsg}\n\n`;
 
-  for (const msg of conversation) {
-    const role = msg.role || "user";
+  for (const msg of messages) {
     const content = getMessageContent(msg.content);
-    if (role === "user") prompt += `User: ${content}\n\n`;
-    else if (role === "assistant") prompt += `Assistant: ${content}\n\n`;
-    else if (role === "tool") prompt += `Tool Result: ${content}\n\n`;
+    prompt += `${content}\n\n`;
   }
 
   return prompt.trim();
@@ -233,7 +354,7 @@ function messagesToPrompt(messages, includeToolInstructions = true) {
 
 function parseToolCalls(content) {
   const toolCalls = [];
-  content = content.replace(/<tool_call>([a-zA-Z_][a-zA-Z0-9_]*)>/gi, "<$1>");
+  content = content.replace(/<tool_call<([a-zA-Z_][a-zA-Z0-9_]*)>/gi, "<$1>");
   const markdownJsonPattern = /```(?:json)?\s*\n?\s*(\{[\s\S]*?\})\s*\n?```/gi;
   let match;
 
@@ -268,7 +389,7 @@ function parseToolCalls(content) {
     } catch (e) {}
   }
 
-  const xmlPattern = /<tool_call>\s*<function=([^>]+)>([\s\S]*?)<\/function>\s*<\/tool_call>/gi;
+  const xmlPattern = /<tool_call\s*<function=([^>]+)>([\s\S]*?)<\/function>\s*<\/tool_call>/gi;
   while ((match = xmlPattern.exec(content)) !== null) {
     const funcName = match[1].trim();
     const paramsBlock = match[2];
@@ -287,7 +408,7 @@ function parseToolCalls(content) {
     });
   }
 
-  const jsonPattern = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/gi;
+  const jsonPattern = /<tool_call\s*(\{[\s\S]*?\})\s*<\/tool_call>/gi;
   while ((match = jsonPattern.exec(content)) !== null) {
     try {
       const toolData = JSON.parse(match[1]);
@@ -383,9 +504,9 @@ function parseToolCalls(content) {
 
 function removeToolCallsFromContent(content) {
   let cleaned = content;
-  cleaned = cleaned.replace(/<tool_call>([a-zA-Z_][a-zA-Z0-9_]*)>[\s\S]*?<\/\1>/gi, "");
-  cleaned = cleaned.replace(/<tool_call>([a-zA-Z_][a-zA-Z0-9_]*)>[\s\S]*?(?=<tool_call>|$)/gi, "");
-  cleaned = cleaned.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "");
+  cleaned = cleaned.replace(/<tool_call<([a-zA-Z_][a-zA-Z0-9_]*)>[\s\S]*?<\/\1>/gi, "");
+  cleaned = cleaned.replace(/<tool_call<([a-zA-Z_][a-zA-Z0-9_]*)>[\s\S]*?(?=<tool_call|$)/gi, "");
+  cleaned = cleaned.replace(/<tool_call[\s\S]*?<\/tool_call>/gi, "");
 
   const rooClineTools = [
     "write_file","read_file","apply_diff","execute_command","list_files","search_files",
@@ -413,7 +534,7 @@ function removeToolCallsFromContent(content) {
 
 function hasIncompleteToolCall(content) {
   const patterns = [
-    /<tool_call>(?![\s\S]*<\/tool_call>)/i,
+    /<tool_call(?![\s\S]*<\/tool_call>)/i,
     /<function=[^>]+>(?![\s\S]*<\/function>)/i,
     /<write_file>(?![\s\S]*<\/write_file>)/i,
     /<write_to_file>(?![\s\S]*<\/write_to_file>)/i,
@@ -443,7 +564,7 @@ function hasIncompleteToolCall(content) {
     /<Task>(?![\s\S]*<\/Task>)/,
     /<TodoWrite>(?![\s\S]*<\/TodoWrite>)/,
     /<AskUserQuestion>(?![\s\S]*<\/AskUserQuestion>)/,
-    /<tool_call>[A-Za-z]+>(?![\s\S]*<\/[A-Za-z]+>)/,
+    /<tool_call<[A-Za-z]+>(?![\s\S]*<\/[A-Za-z]+>)/,
   ];
   for (const p of patterns) if (p.test(content)) return true;
   return false;
@@ -824,6 +945,7 @@ async function* sendToZAI(prompt, options = {}) {
     previewMode = session.features.previewMode,
     chatId = session.chatId,
     messages = session.messages,
+    clientMessages = null,  // Structured messages from client — forwarded as-is
   } = options;
 
   if (!session.initialized) await initializeSession();
@@ -840,17 +962,20 @@ async function* sendToZAI(prompt, options = {}) {
     "Content-Type": "application/json"
   };
 
-  const msgList = [...messages];
-  msgList.push({ role: "user", content: prompt });
+  // ── Forward structured messages, NOT flattened prompt ──
+  // When clientMessages are provided (from API routes), use them directly.
+  // Otherwise, fall back to legacy behavior (append flat prompt to session history).
+  const forwardedMessages = clientMessages
+    ? clientMessages
+    : [...messages, { role: "user", content: prompt }];
 
-  const body = JSON.stringify({
+  // Build the request body — forward all client-provided fields
+  const requestBody = {
     model,
     chat_id: chatId,
-    messages: msgList,
-    signature_prompt: prompt,
+    messages: forwardedMessages,       // ← structured messages forwarded as-is
+    signature_prompt: prompt,           // ← flat string still used for HMAC signing (unchanged)
     stream: true,
-    params: {},
-    extra: {},
     features: {
       image_generation: imageGen,
       web_search: webSearch,
@@ -861,7 +986,9 @@ async function* sendToZAI(prompt, options = {}) {
     },
     variables: getContextVars(),
     background_tasks: { title_generation: true, tags_generation: true }
-  });
+  };
+
+  const body = JSON.stringify(requestBody);
 
   if (config.logging.level === "debug") {
     console.log("[DEBUG] Z.AI request body:", body);
@@ -1061,7 +1188,7 @@ const getDashboardHTML = (host) => `<!DOCTYPE html>
         <div class="endpoint">
           <span class="method post">POST</span>
           <span class="path">/features</span>
-          <div class="desc">Toggle webSearch, thinking, imageGen, previewMode</div>
+          <div class="desc">Toggle webSearch, thinking, imageGen, previewMode, persistHistory</div>
         </div>
         <div class="endpoint">
           <span class="method post">POST</span>
@@ -1166,11 +1293,6 @@ app.post("/v1/messages", authMiddleware, async (req, res) => {
     messages,
     system,
     stream = false,
-    max_tokens,
-    tools,          // accepted but not forwarded (Z.AI handles via prompt)
-    tool_choice,    // accepted, ignored
-    temperature,    // accepted, ignored
-    metadata,       // accepted, ignored
   } = req.body;
 
   if (!messages || !Array.isArray(messages)) {
@@ -1180,17 +1302,20 @@ app.post("/v1/messages", authMiddleware, async (req, res) => {
   const reqSession = getOrCreateSession(req);
   const requestId = generateId();
 
-  // Build flat prompt from Anthropic messages + system
+  // ── KEY CHANGE: Forward structured messages, flatten ONLY for signature ──
+  // 1) Convert Anthropic-format messages → OpenAI-format messages (lossless)
+  const openaiMessages = anthropicToOpenAIMessages(messages, system);
+
+  // 2) Flatten to prompt string ONLY for signature_prompt / HMAC signing (unchanged behavior)
   const prompt = anthropicMessagesToPrompt(messages, system);
   const inputTokens = estimateTokens(prompt);
 
   // Map claude-* model names to a Z.AI model
-  // glm-5 is the default capable model; glm-5-turbo for "opus"-level requests
   const zaiModel = (() => {
     const m = (model || "").toLowerCase();
     if (m.includes("opus"))   return "GLM-5-Turbo";
     if (m.includes("haiku"))  return "glm-5";
-    return "glm-5"; // sonnet and everything else
+    return "glm-5";
   })();
 
   const opts = {
@@ -1201,6 +1326,7 @@ app.post("/v1/messages", authMiddleware, async (req, res) => {
     previewMode: session.features.previewMode,
     chatId: reqSession.chatId,
     messages: reqSession.messages,
+    clientMessages: openaiMessages,
   };
 
   // ── STREAMING ──
@@ -1328,9 +1454,11 @@ app.post("/v1/messages", authMiddleware, async (req, res) => {
       res.write(sseEvent("message_stop", { type: "message_stop" }));
       res.write(`data: [DONE]\n\n`);
 
-      // Update session history
-      reqSession.messages.push({ role: "user", content: prompt });
-      if (fullContent) reqSession.messages.push({ role: "assistant", content: fullContent });
+      // ── History persistence (toggle-gated) ──
+      if (session.features.persistHistory) {
+        reqSession.messages.push({ role: "user", content: prompt });
+        if (fullContent) reqSession.messages.push({ role: "assistant", content: fullContent });
+      }
 
     } catch (e) {
       console.error("[Anthropic Stream] Error:", e.message);
@@ -1349,8 +1477,11 @@ app.post("/v1/messages", authMiddleware, async (req, res) => {
         fullContent += chunk;
       }
 
-      reqSession.messages.push({ role: "user", content: prompt });
-      if (fullContent) reqSession.messages.push({ role: "assistant", content: fullContent });
+      // ── History persistence (toggle-gated) ──
+      if (session.features.persistHistory) {
+        reqSession.messages.push({ role: "user", content: prompt });
+        if (fullContent) reqSession.messages.push({ role: "assistant", content: fullContent });
+      }
 
       res.json(formatAnthropicResponse(fullContent, model, requestId));
     } catch (e) {
@@ -1362,7 +1493,7 @@ app.post("/v1/messages", authMiddleware, async (req, res) => {
 });
 
 // ============================================================
-// ── OPENAI-COMPATIBLE /v1/chat/completions (unchanged) ──────
+// ── OPENAI-COMPATIBLE /v1/chat/completions ──────────────────
 // ============================================================
 
 const knownModels = [
@@ -1372,11 +1503,6 @@ const knownModels = [
 ];
 
 app.get("/v1/models", authMiddleware, (req, res) => {
-  // Detect whether caller wants Anthropic or OpenAI format
-  const wantsAnthropic = req.headers["anthropic-version"] ||
-                         req.headers["x-api-key"] ||
-                         (req.headers.authorization || "").includes(config.auth.token);
-
   res.json({
     object: "list",
     data: knownModels.map(m => ({
@@ -1402,6 +1528,10 @@ app.post("/v1/chat/completions", authMiddleware, async (req, res) => {
 
   const reqSession = getOrCreateSession(req);
   const requestId = generateId();
+
+  // ── KEY CHANGE: Forward structured messages, flatten ONLY for signature ──
+  // 1) Use client messages array directly (already in OpenAI format)
+  // 2) Flatten to prompt string ONLY for signature_prompt / HMAC signing
   const prompt = messagesToPrompt(messages);
 
   const opts = {
@@ -1412,6 +1542,7 @@ app.post("/v1/chat/completions", authMiddleware, async (req, res) => {
     previewMode: session.features.previewMode,
     chatId: reqSession.chatId,
     messages: reqSession.messages,
+    clientMessages: messages,  // ← structured messages forwarded as-is
   };
 
   if (stream) {
@@ -1456,8 +1587,11 @@ app.post("/v1/chat/completions", authMiddleware, async (req, res) => {
       res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
       res.write("data: [DONE]\n\n");
 
-      reqSession.messages.push({ role: "user", content: prompt });
-      if (fullContent) reqSession.messages.push({ role: "assistant", content: fullContent });
+      // ── History persistence (toggle-gated) ──
+      if (session.features.persistHistory) {
+        reqSession.messages.push({ role: "user", content: prompt });
+        if (fullContent) reqSession.messages.push({ role: "assistant", content: fullContent });
+      }
 
     } catch (e) {
       console.error("[Stream] Error:", e.message);
@@ -1474,8 +1608,13 @@ app.post("/v1/chat/completions", authMiddleware, async (req, res) => {
       for await (const chunk of sendToZAI(prompt, opts)) {
         fullContent += chunk;
       }
-      reqSession.messages.push({ role: "user", content: prompt });
-      if (fullContent) reqSession.messages.push({ role: "assistant", content: fullContent });
+
+      // ── History persistence (toggle-gated) ──
+      if (session.features.persistHistory) {
+        reqSession.messages.push({ role: "user", content: prompt });
+        if (fullContent) reqSession.messages.push({ role: "assistant", content: fullContent });
+      }
+
       res.json(formatOpenAIResponse({ content: fullContent }, model, requestId));
     } catch (e) {
       console.error("[API] Error:", e.message);
@@ -1498,9 +1637,15 @@ app.post("/prompt", authMiddleware, async (req, res) => {
       thinking: deepThink ?? session.features.thinking,
       chatId: reqSession.chatId,
       messages: reqSession.messages,
+      // NOTE: /prompt route has no structured clientMessages — falls back to legacy behavior
     })) { fullContent += chunk; }
-    reqSession.messages.push({ role: "user", content: prompt });
-    if (fullContent) reqSession.messages.push({ role: "assistant", content: fullContent });
+
+    // ── History persistence (toggle-gated) ──
+    if (session.features.persistHistory) {
+      reqSession.messages.push({ role: "user", content: prompt });
+      if (fullContent) reqSession.messages.push({ role: "assistant", content: fullContent });
+    }
+
     res.json({ success: true, response: fullContent });
   } catch (e) {
     console.error("[Prompt] Error:", e.message);
@@ -1509,11 +1654,12 @@ app.post("/prompt", authMiddleware, async (req, res) => {
 });
 
 app.post("/features", authMiddleware, (req, res) => {
-  const { webSearch, thinking, imageGen, previewMode } = req.body;
-  if (webSearch  !== undefined) { session.features.webSearch = !!webSearch; session.features.autoWebSearch = !!webSearch; }
-  if (thinking   !== undefined) session.features.thinking   = !!thinking;
-  if (imageGen   !== undefined) session.features.imageGen   = !!imageGen;
-  if (previewMode!== undefined) session.features.previewMode= !!previewMode;
+  const { webSearch, thinking, imageGen, previewMode, persistHistory } = req.body;
+  if (webSearch     !== undefined) { session.features.webSearch = !!webSearch; session.features.autoWebSearch = !!webSearch; }
+  if (thinking      !== undefined) session.features.thinking     = !!thinking;
+  if (imageGen      !== undefined) session.features.imageGen     = !!imageGen;
+  if (previewMode   !== undefined) session.features.previewMode  = !!previewMode;
+  if (persistHistory !== undefined) session.features.persistHistory = !!persistHistory;
   console.log("[Features] Updated:", session.features);
   res.json({ success: true, features: session.features });
 });
