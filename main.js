@@ -860,6 +860,28 @@ async function initializeSession() {
   }
 
   session.initializing = true;
+
+  // ── Fast path: use hardcoded ZAI_TOKEN, skip guest flow ──
+  if (config.zaiToken) {
+    console.log("[Session] Using hardcoded ZAI_TOKEN, skipping guest init.");
+    session.token = config.zaiToken;
+    try {
+      const parts = session.token.split(".");
+      const padded = parts[1] + "==";
+      const payload = JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+      session.userId = payload.id || "";
+      session.userName = (payload.email || "User").split("@")[0];
+      console.log(`[Session] Token user: ${session.userId.substring(0, 8)}... (${session.userName})`);
+    } catch (e) {
+      console.warn("[Session] Token decode failed, continuing with raw token.");
+      session.userId = "";
+      session.userName = "User";
+    }
+    session.initialized = true;
+    session.initializing = false;
+    return;
+  }
+
   console.log("[Session] Initializing Z.AI session...");
 
   try {
