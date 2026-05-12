@@ -55,7 +55,7 @@ When `ZAI_TOKEN` is set, the server skips guest initialization entirely and uses
 ## ⚠️ Known Limitations
 
 - **Tool / function calling** is not natively supported by Z.AI. The bridge parses XML-format tool calls from model output and converts them to structured blocks, but results may vary for complex agentic workflows.
-- **HTTP 405 errors** indicate your IP has been rate-limited or blocked by Z.AI for excessive API usage. To avoid this, keep prompts under 60,000 characters and avoid sending rapid bursts of requests.
+- **HTTP 429 errors** indicate your IP has been rate-limited or blocked by Z.AI for excessive API usage. To avoid this, keep prompts under 60,000 characters and avoid sending rapid bursts of requests.
 
 ---
 
