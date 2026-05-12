@@ -935,7 +935,8 @@ async function* sendToZAI(prompt, options = {}) {
   if (!session.initialized) await initializeSession();
 
   const { signature, urlParams } = generateZaSignature(prompt, session.token, session.userId);
-  const url = `${BASE_URL}/api/v2/chat/completions?${urlParams}`;
+  // const url = `${BASE_URL}/api/v2/chat/completions?${urlParams}`;
+  const url = `${BASE_URL}/api/v2/chat/completions`;
 
   const headers = {
     "Origin": BASE_URL,
