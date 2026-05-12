@@ -42,6 +42,7 @@ export ZAI_TOKEN="<your_token_here>"
 **Step 4 — Start the server**
 
 ```bash
+# npm install
 node main.js
 ```
 
