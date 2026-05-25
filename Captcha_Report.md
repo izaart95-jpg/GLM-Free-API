@@ -1004,7 +1004,7 @@ Script is working
 ```
 
 
-// Simplified version of what the code does:
+// Simplified version of what the code does in real:
 
 ```javascript
 var Rt = {
@@ -1485,7 +1485,7 @@ function Pe() {
             return c = ye(o, c),
             be([n, e.DEVICE_TYPE.WEB, c, r.APP_VERSION, "CLOUD", ""])
         }
-        ```
+```
 Notes 
 - 1. `var n` in context of `var n = t.appKey || r.APP_KEY can have multiple values since it likely gets it values from Rt.appKey which have different values based on region and version. This is same for `var i` im not sure but it seems obviuous 
 - 2. in context of `var o` the key used is e.WEB_AES_FLAG_SECRET_KEY since r.secretKey is undefined and we should stick to it since it works 
@@ -2031,4 +2031,135 @@ const signature = generateAliyunSignature(params, "YSKfst7GaVkXwZYvVihJsKF9r89ko
 params.Signature = signature;
 
 console.log("Generated params with signature:", params);
+```
+
+---
+
+## Part 8: CaptchaFlow
+### 1. AliyunCaptccha.js Loads
+
+### 2. Loads fielin.*.js
+feiling.js generates DeviceToken and exposes a call
+`window.um?.getToken`
+`window.z_um?.getToken`
+DeviceToken is calulated by fielin js and used in client server requests
+
+### 3. InitCaptchaV3
+fetch request
+```javascript
+fetch("https://no8xfe.captcha-open-southeast.aliyuncs.com/", {
+  "headers": {
+    "accept": "*/*",
+    "accept-language": "en-US,en;q=0.9,ur-IN;q=0.8,ur-PK;q=0.7,ur;q=0.6",
+    "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+    "priority": "u=1, i",
+    "sec-ch-ua": "\"Not-A.Brand\";v=\"24\", \"Chromium\";v=\"146\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Linux\"",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "cross-site"
+  },
+  "body": "AccessKeyId=LTAI5tSEBwYMwVKAQGpxmvTd&SignatureMethod=HMAC-SHA1&SignatureVersion=1.0&Format=JSON&Timestamp=2026-05-25T02%3A42%3A52Z&Version=2023-03-05&Action=InitCaptchaV3&SceneId=didk33e0&Language=en&Mode=popup&UpLang=true&DeviceData=TEQYvgJq1LrMqFaBybfIzPxz2ygFyAct7X%2Fw%2BLacfXWd9rGSwE%2Fx6ZCONucD1fehS2Qpig6tUVsFK111d9wIk5pWp6rwYjzFCRgL7pNp8bzGsvOSdUXgQTopQm90YPSdCiRAlgENdODLvY7P8jrfO9eC15tPCPwLxcRIrcspVvQYqVfk9%2FyFeIlePKmTRjkM&SignatureNonce=9aab2319-86bf-4019-839e-82225f796296&Signature=UDiQcb82lN5kZT0ZPNOmw0hT8sw%3D",
+  "method": "POST",
+  "mode": "cors",
+  "credentials": "omit"
+});
+```
+DeviceData is sent on first request it is determined by if the previous response inlucded CaptchaTypre Traceless or not since before there was no request it is fired 
+On second requst DeviceToken is sent if previous inclueded TRACELESS captcha type
+```json
+{
+    "CertifyId": "gl62Aqi6e1",
+    "Message": "success",
+    "RequestId": "65A5902F-1573-4BA3-BB81-898D35553B23",
+    "Code": "Success",
+    "LimitFlow": false,
+    "Success": true,
+    "StaticPath": "3.25.0/pe.050.9453665072ad79a7",
+    "CaptchaType": "TRACELESS",
+    "DeviceConfig": "ckj8rA4/WEfd9fOcvSSuIJ6e0IDZR3X79geskaQ1tN6EJBdqOGupxhCCoHnlEZsxgowJxh2znY9HEY2Ruj07n/YhavNvqMCzc3ppJQkefLtCHXx7PUpO8NhrB+OV2e3AnSJ1oRFgSX7sWxZoUSoLNYNh8QbZOYMHO+ShVv5BADyF02OloVszuUsNbbDeDYId2moM/OpnagWMpLGNJJiVFOfHevUTtYQTsNN/X9iCN3RayeHFtcgxBjhEZcfHPzNVYn6bCGyZ2mCVE8J1swWnPFKiSJuiWiAxX4Qsn5pOtWs="
+}
+```
+
+```javascript
+Object.keys(AliyunCaptcha.prototype)
+[
+    "config",
+    "deviceConfig",
+    "startPOWCalculation",
+    "init",
+    "bindEvents",
+    "show",
+    "hide",
+    "loading",
+    "onBizSuccess",
+    "onBizFail",
+    "initPopup",
+    "initEmbed",
+    "initFloat",
+    "destroyCaptcha",
+    "refresh",
+    "onCloseClick",
+    "startTracelessVerification"
+]
+```
+
+The StaticPath is randomised for eg 3.25.0/pe.050.9453665072ad79a7
+It is used to load a javascript from path
+for StaticPath 3.25.0/pe.050.9453665072ad79a7 it loads
+
+https://g.alicdn.com/captcha-frontend/dynamicJS/3.25.0/pe.050.9453665072ad79a7.js
+
+The javascript calculates data field which is very hard tor reverse engineer
+
+Btw all javasripts calculates data in same way just function names are variables are renamed
+using mitmproxy i tested to use a single js every time and it works
+### 3. VerifyCaptchaV3
+```javascript
+fetch("https://no8xfe.captcha-open-southeast.aliyuncs.com/", {
+  "headers": {
+    "accept": "*/*",
+    "accept-language": "en-US,en;q=0.9,ur-IN;q=0.8,ur-PK;q=0.7,ur;q=0.6",
+    "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+    "priority": "u=1, i",
+    "sec-ch-ua": "\"Not-A.Brand\";v=\"24\", \"Chromium\";v=\"146\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Linux\"",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "cross-site"
+  },
+  "body": "AccessKeyId=LTAI5tSEBwYMwVKAQGpxmvTd&SignatureMethod=HMAC-SHA1&SignatureVersion=1.0&Format=JSON&Timestamp=2026-05-25T02%3A43%3A00Z&Version=2023-03-05&Action=VerifyCaptchaV3&SceneId=didk33e0&CertifyId=gl62Aqi6e1&CaptchaVerifyParam=%7B%22sceneId%22%3A%22didk33e0%22%2C%22certifyId%22%3A%22gl62Aqi6e1%22%2C%22deviceToken%22%3A%22U0dfV0VCIzM3OTVkMjgyNDJhMTE2MTliYzI1Zjc4NmY4NGU1M2Q0LWgtMTc3OTY3Njk3NzYzMC1kMjA1YTU2MjFmMTY0NDA2YjI5ZTQyMGRkNTUxMzI1MSM3dTU1SjBYc09Uc1IzaXVKS0Zhb09kY1dwVEtxcDBsN2NlRTBHd3VhVy9UVjZ4ZnpVWVhBMWtZQnNWR2pza3A1MW0wak9lMDNadFdHdDV6b3pTOElNOEFPR21ydHUwbnU2ZDdWZUlLbVIrMzNPVkZUYW1VcGtRK0VtVHBTQ1NMa3ZjcXB0NDdFTXdyOFNOMW42SnpWZ0sxMDN6QzA1Q1g1T1Y1bnBSV3hZREdzUFhRVnpTcytxWEFqczhJS3ZiU1dZb0tUNVFFM2ZVR2ZwamNlclNoaWkzSG50OU0ySmlmWmd2amxzSlowYVNqQ0JiL1kwTGlGUlRST1I2Y2FydThMbEdPTFA4TUUxem9hQ1JKWjlSeEE3ekcyVjRmdnBBa0tsU1U4aFZTVkpDMHl2N1ZCaFhuSDMrSWFTWUh1TitRR00vdndoYllqOVNPVUZhQjJDYllQU0xpandobS9HTk1QcVBBQ2xVNllNQndDTVRuYk40MDJmTVorRTVTVVU0eGNXYnBvTnJhdlg1MDVLbktUTEcwbGVmTmpmZVd4VThDL1doWDBVQ1FjZXl1S1owMjM1QjFlZys2cEI3Y2RFR0ZML2xkRTY5VzlkN1U3bzRMYnVYT1IwemZWeDlQKzhmNStBL3dySmZyZXcrSkJBelE4Wm8zYkxScEtac2RjMFZpSENza2ZQeUkwWSsyQStCaHpvd0Q4QXdMQ2tIZisyZ2tBK2xVaGdyRGhEcWlqNU5nL21YSTdwdVFEbUJkRjFKUllzY3ZCbU53OUt4T09xQVBMN2tvaFRqZGw4TjljWUVTdm0zRTQ0bEJ5d21WZEQyOVFmeWwzOWYrbmlHdlJGc0lDaDJMK3ZIMStlTFNBN3B4MFpWV2pMUVI1eUpyeHZ0eUxQVVgxQ2JpZE9FNkp1bEZpd1BpbnlYK0RvTHBEQVZTdnFqRjNWMVY5bVJtMjVqL1YwaDBhMkhkWWV1UTNQNlVOWUtDNk1wc3BPM2JqMmdSR1J1VDA2V050NVRmZWdETWNWeWVFeEZpYWxPWHZia3dhbjZ3ZWYvbEVGUHF3RUVPZ1ROWDAxdEtXUm1VNWxSOGJKQVdjaUhCTnJQOEpOY0FyMGV0Z2xjd1RxVVhOTngrZ2xrYzdkMzJ3Zk5tZ1BCUjV3Q3h3NjdIWTUzVTI3dHNQMjRVVHVOaGc3SkhjNk5kdDBmQ0JvUDRXdmxpaFdEbFBQQ3Vic1FObFZBS1VYZ0JoYUFDMUVMbmt0Ukt6eEZXNWJ1TzlTOUVDT0RBQWdTNVBrZzIzVldpRTJCOW9DbkFyRERpdVpwZDY4bUpHdnljemdZeXFhd0pWSlp6TzVoaTNoazkvNDdlcy85dExGbzAvMmlmcTVTS01kRTdhVkZlNnRtREVCdz09IzAjN2JkNzMyZDIwZTc1NmEyNmY0OTU1ZGJhYjU4MjhjOWE%3D%22%2C%22data%22%3A%22JRMlgg0gDgVASQIXRQRNMFsDRJoGeSB5eQp9YWNPH%2Fw6iT2%2B96hKSApjEY9S1AZt4rwnZQKgGGOjoeIYWpEaAJdJFhEbK15pcCcKYi0%2FNEgaXU4YLj19be54MEMWEBqDqzmjFdV5KuAcSYQ%2FYWYLNeJ3jZ8VzTdU%2FwO4QqMVb8BXhzAENTBkSQ1iXQhwvkMi01UB7yClAj59DW9NKmNkaj1eS%2BQpfSlvKJ1iF2IXEDcbqi4rbP%2B3BDaUnxMkbo0aLSs8RXxbQH8%3D%22%7D&SignatureNonce=bae00c65-c089-41fc-a704-84576ebea034&Signature=azbdVXlzzucKOIz1kICXOmafPJg%3D",
+  "method": "POST",
+  "mode": "cors",
+  "credentials": "omit"
+});
+```
+
+```json
+{
+    "RequestId": "F06551B1-2C26-453F-B570-AB7687D82551",
+    "Message": "success",
+    "HttpStatusCode": 200,
+    "Code": "Success",
+    "Success": true,
+    "Result": {
+        "securityToken": "6oOo7e72nA61uVLiZVKiLYqF1m9rOno3vEIPJKaL7KLxCJqb1UBwRpl4p7EcFTgd3yG06TCPBjR35MbCZ5lDrdjPcqaflqbQLZQdX2rYd/8bhnqhIpC7SnRlIxGPsqvX",
+        "VerifyCode": "T001",
+        "VerifyResult": true,
+        "certifyId": "gl62Aqi6e1"
+    }
+}
+```
+
+
+### 4. captcha_verify_param generation and usage
+
+captcha_verify_param is base64 encoded string which contains scene id certify id and token and is snet in completions requests
+```base64
+eyJjZXJ0aWZ5SWQiOiJnbDYyQXFpNmUxIiwic2NlbmVJZCI6ImRpZGszM2UwIiwiaXNTaWduIjp0cnVlLCJzZWN1cml0eVRva2VuIjoiNm9PbzdlNzJuQTYxdVZMaVpWS2lMWXFGMW05ck9ubzN2RUlQSkthTDdLTHhDSnFiMVVCd1JwbDRwN0VjRlRnZDN5RzA2VENQQmpSMzVNYkNaNWxEcmRqUGNxYWZscWJRTFpRZFgycllkLzhiaG5xaElwQzdTblJsSXhHUHNxdlgifQ==
+```
+```utf
+{"certifyId":"gl62Aqi6e1","sceneId":"didk33e0","isSign":true,"securityToken":"6oOo7e72nA61uVLiZVKiLYqF1m9rOno3vEIPJKaL7KLxCJqb1UBwRpl4p7EcFTgd3yG06TCPBjR35MbCZ5lDrdjPcqaflqbQLZQdX2rYd/8bhnqhIpC7SnRlIxGPsqvX"}
 ```
