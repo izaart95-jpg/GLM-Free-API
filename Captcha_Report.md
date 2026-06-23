@@ -1,4 +1,4 @@
-# Aliyun CaptchaJS Imformation Report 
+# Aliyun CaptchaJS Information Report 
 
 # Part 1: Obfuscation & Deobfuscation of literals 
 
@@ -2979,8 +2979,8 @@ er = P(0, [], F, V, ez, [er, (td && td)(77, 19)]) + er
 
 
 ```javascript
-# Function P
-function t(n, e, r, i, a, o) {
+// Function P
+var P = function t(n, e, r, i, a, o) {
             var c, s, u, f, l, h, p, d, A;
             function v(t) {
                 var n, e;
@@ -3172,15 +3172,17 @@ function t(n, e, r, i, a, o) {
         }
 
 ```
-### # value of ez
+### value of ez
+```json
 {
     "r": 1
 }
-
+```
 ### Value of td(77,19)
 '0000'
 
 ### Value of V
+```json
 [
     "o",
     "r",
@@ -3474,7 +3476,7 @@ function t(n, e, r, i, a, o) {
     "y",
     "charCodeAt"
 ]
-
+```
 even when __ALIYUN_CRYPT was not defined in the scope it caculated exact md5
 
 Also found salt mystery that vm likely uses some kind of special parsing salt  which returns 0 so when i tested salt = 00 , 000 , 0000000 all worked but using 0010 doesnt but using 0000000000001 works
