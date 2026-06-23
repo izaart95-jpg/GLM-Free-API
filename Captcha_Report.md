@@ -2163,3 +2163,1324 @@ eyJjZXJ0aWZ5SWQiOiJnbDYyQXFpNmUxIiwic2NlbmVJZCI6ImRpZGszM2UwIiwiaXNTaWduIjp0cnVl
 ```utf
 {"certifyId":"gl62Aqi6e1","sceneId":"didk33e0","isSign":true,"securityToken":"6oOo7e72nA61uVLiZVKiLYqF1m9rOno3vEIPJKaL7KLxCJqb1UBwRpl4p7EcFTgd3yG06TCPBjR35MbCZ5lDrdjPcqaflqbQLZQdX2rYd/8bhnqhIpC7SnRlIxGPsqvX"}
 ```
+
+
+## Part 9: Verify Captcha payload generation
+
+### The request
+
+```javascript
+fetch("https://no8xfe.captcha-open-southeast.aliyuncs.com/", {
+  "headers": {
+    "accept": "*/*",
+    "accept-language": "en-US,en;q=0.9",
+    "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+  },
+  "referrerPolicy": "no-referrer",
+  "body": "AccessKeyId=LTAI5tSEBwYMwVKAQGpxmvTd&SignatureMethod=HMAC-SHA1&SignatureVersion=1.0&Format=JSON&Timestamp=2026-06-19T06%3A42%3A09Z&Version=2023-03-05&Action=VerifyCaptchaV3&SceneId=didk33e0&CertifyId=KdeAGaejyN&CaptchaVerifyParam=%7B%22sceneId%22%3A%22didk33e0%22%2C%22certifyId%22%3A%22KdeAGaejyN%22%2C%22deviceToken%22%3A%22U0dfV0VCIzM3OTVkMjgyNDJhMTE2MTliYzI1Zjc4NmY4NGU1M2Q0LWgtMTc4MTg1MTQ4NDgxOC0xZDgwY2E3MWE3ZDQ0MzA5OTI4NDEzZjAyY2FhODA0MyM4RDJWN05odUhRWHhkQzhJbWxaa0tiMjNCaUM0WjYwUWtqTlNjOEZnbFhNOFpsb2dFbzZxMVZDcjdDazhVdEM3emlGbDROa3ViUHFnK0NvVkk0RXJmYkowSUwvUlg1RnhITDFYbHd1U3E3MzZWUDhrTnFZZENCdDFtelIrTHRPMGNkRDJBRitIYVZQZkZhTFJac0pMS1FVR1QwWjd6TFFMVVlacTdCeVNYTGhKZWMvd1NkV0FtdjZEUkNLYUpZc0ZvTlkzbGJnbFdHOFVEUDBWdFVjUGt1MjJmVTlobVJmQno4UnlaWmVIeTgzRkF3dXF4bjhsY1htUGZBQ25BSUlLR3pXS2UzWTlocEFOemxwNEoxQStaaTNROFJUeE5tam1vbmxiTjdkb3h3bmozbkpPcERmQlhNeFNNaUxmdHF6MWxtRlFZbzhEbFpNQzVqaEI3UnFFbDZlellHMWJWU3UxQVA4VWFYY1VFdFhSYU43V2pEQk5YaThDWnZVTmRBY1lRRjEyZWwwS0ZZS3A4VGNpVkI1YXBKQk4vQk9Pa1BMcmYzcTYwcHA5cElZSkpZa1pDekRZbGFpVHljMWhEdTYyM2Q4WjN3UWtjOG9scEdKZHY5OElnSnp1a1Riem1jYjlaWEtuWVVVK1FaWEpEbUlBYTVzTy9iaDRYOTlJalZIZmlvc1huN1QzR0dUNU51Ny9tckRyQ2VYR2YyOWJNdzdqeVZHKzVISFVhTHltSVNwTTRZdFQ3NVFpTWVmeGlJaG1XTWNReFBIQ05WWG5RUDFUdnVHTGxieHhUa1RRZ0R1Tldrc0hvalFWbkd1QlB0Sk5zMHpTekxvSzFhQ1dZaGhnbVlXOStNWXVWR1Zkekx0TnJJY2wyRlF2U1F2N1drdVRVOXFtUFlQNEJBbCtIMWh1QVdadFVxWllENzZVLzhUWi9XV0NTM1hsU05ycEFFTTVUa1FlVVdHN0hkaHUwYmNzUHJqUU44NTE4Ym11a1M5YUZxKy9YQnJxcjRzMjFXTWNXaGRXcVpnS3NJaGVneGh3YnlMYW12ajN3YVQ1a1d3eEZzT0RRMGVycEJUdUFlRjRYbVVhNmtXQmZSNWZaVXlmIzAjMDdiOTE3ODA5YTRkNWEzMjE5YjEyZjk4NTI1ZTNjMWY%3D%22%2C%22data%22%3A%22JRMlgg03DgRAeAILRQpEEHPjZZg9Ez1fbA0qd1yjNhsriXK5OHh3ZgkJc2NaO%2BpbP7wtcQGL6Gvi5LEZqOMpPHYyKHIfAmJWGUMiBRsQD0kkUUkiCA1Jd8BAFFEFUmL%2BQMu4MyFaXRQ8WWI%2BZ3Ib%2BByNmoNjgz5I0ECwZobWT5V6ii5ADARXc1BcB3ZnpVMtJn97EAZbYV5%2BLy9SEyhzMjNYnyF8fCUVJIx0UDQ2LMIfjHwgCMu0MPWbvABhaIf6ZjkXeldLQW4%3D%22%7D&SignatureNonce=0ecd84d6-b4ce-473c-b4d3-1cb4d0dcbca9&Signature=Oyh7ojzWm1sLLw%2BdNzrs8Ulfb88%3D",
+  "method": "POST",
+  "mode": "cors",
+  "credentials": "omit"
+});
+```
+
+
+### Successfull Response
+```json
+{"RequestId":"037B581E-C73A-4CFB-A23D-AB00F498CC0D","Message":"success","HttpStatusCode":200,"Code":"Success","Success":true,"Result":{"securityToken":"6oOo7e72nA61uVLiZVKiLYqF1m9rOno3vEIPJKaL7KLxCJqb1UBwRpl4p7EcFTgdXev7OeyuHCpA5PzF5PUSndjPcqaflqbQLZQdX2rYd/8bhnqhIpC7SnRlIxGPsqvX","VerifyCode":"T001","VerifyResult":true,"certifyId":"KdeAGaejyN"}}
+```
+
+### Payload Data
+```json
+"data":"JRMlgg03DgRAeAILRQpEEHPjZZg9Ez1fbA0qd1yjNhsriXK5OHh3ZgkJc2NaO+pbP7wtcQGL6Gvi5LEZqOMpPHYyKHIfAmJWGUMiBRsQD0kkUUkiCA1Jd8BAFFEFUmL+QMu4MyFaXRQ8WWI+Z3Ib+ByNmoNjgz5I0ECwZobWT5V6ii5ADARXc1BcB3ZnpVMtJn97EAZbYV5+Ly9SEyhzMjNYnyF8fCUVJIx0UDQ2LMIfjHwgCMu0MPWbvABhaIf6ZjkXeldLQW4="
+```
+The data is base64 encoded likely encrypted zlib compressed and md5 or similar hash prepended data 
+
+The actual data looks like : hash+json `'9333ef7396dd56dbb9d6e8f31e8f6014{"TrackList":{"mc":"","tc":"","mu":"","te":"","mp":"","tmv":"","ks":"","fi":"","startTime":1782100652835},"TrackStartTime":1782100652835,"VerifyTime":1782100652862,"arg":"JjObDGdh/ywcWQ=="}'`
+mc = mouse clicks
+tc = touch?
+mu = mouse up?
+etc.
+arg is base64 encoded 10 byte value
+
+## Entire VerifyCaptcha is done by pe.*.*.js file returned in init captcha response
+
+### Major variables and their values
+```javascript
+var ta = ({
+            0: te
+        })[0](40, 62)
+          , to = window[ta + (~te ? te : 5)(29, 264)]
+          , tc = n[(te && te)(30, 188)]
+          , ts = to[te.apply(2, [97, 51])]
+          , tu = to[te(8. .valueOf(), 15. .valueOf())][(-te ? 4 : te)(19, 273)]
+          , tf = to[te(8, 15)][te(~te && 90, ~te && 86)]
+          , tl = to[te((te(),
+        8), (te(),
+        15))][(te || te)(64, 38)]
+          , th = to[({
+            0: te
+        })[0](62, 187)][te.apply(5, [53, 149])]
+          , tp = to[te.apply(1, [37, 261])]
+          , td = tf[(te(),
+        te)(3, 204) + "y"](tl[te(63 * (1 | te), 50 * (1 | te))](tc))
+          , tA = {};
+        tA.iv = tu[[te][0](63, 50)](td),
+        tA[te(-te ? 5 : 82, 234 * !-te)] = th;
+        var tv = tA;
+
+```
+
+### The values
+```
+ta
+'__ALIYUN
+to = window.__ALIYUN_CRYPT
+Which contains
+
+window.__ALIYUN_CRYPT
+{lib: {â€¦}, enc: {â€¦}, algo: {â€¦}, MD5: Æ, HmacMD5: Æ, â€¦}
+AES
+: 
+{encrypt: Æ, decrypt: Æ}
+DES
+: 
+{encrypt: Æ, decrypt: Æ}
+EvpKDF
+: 
+Æ (t,r,e)
+HmacMD5
+: 
+Æ (r,e)
+HmacRIPEMD160
+: 
+Æ (r,e)
+HmacSHA1
+: 
+Æ (r,e)
+HmacSHA3
+: 
+Æ (r,e)
+HmacSHA224
+: 
+Æ (r,e)
+HmacSHA256
+: 
+Æ (r,e)
+HmacSHA384
+: 
+Æ (r,e)
+HmacSHA512
+: 
+Æ (r,e)
+MD5
+: 
+Æ (r,e)
+PBKDF2
+: 
+Æ (t,r,e)
+RC4
+: 
+{encrypt: Æ, decrypt: Æ}
+RC4Drop
+: 
+{encrypt: Æ, decrypt: Æ}
+RIPEMD160
+: 
+Æ (r,e)
+Rabbit
+: 
+{encrypt: Æ, decrypt: Æ}
+RabbitLegacy
+: 
+{encrypt: Æ, decrypt: Æ}
+SHA1
+: 
+Æ (r,e)
+SHA3
+: 
+Æ (r,e)
+SHA224
+: 
+Æ (r,e)
+SHA256
+: 
+Æ (r,e)
+SHA384
+: 
+Æ (r,e)
+SHA512
+: 
+Æ (r,e)
+TripleDES
+: 
+{encrypt: Æ, decrypt: Æ}
+algo
+: 
+{MD5: {â€¦}, SHA1: {â€¦}, SHA256: {â€¦}, SHA224: {â€¦}, SHA512: {â€¦}, â€¦}
+computeSignature
+: 
+Æ Ce(t,r)
+enc
+: 
+{Hex: {â€¦}, Latin1: {â€¦}, Utf8: {â€¦}, Utf16BE: {â€¦}, Utf16: {â€¦}, â€¦}
+format
+: 
+{OpenSSL: {â€¦}, Hex: {â€¦}}
+kdf
+: 
+{OpenSSL: {â€¦}}
+lib
+: 
+{Base: {â€¦}, WordArray: {â€¦}, BufferedBlockAlgorithm: {â€¦}, Hasher: {â€¦}, Cipher: {â€¦}, â€¦}
+mode
+: 
+{CBC: {â€¦}, CFB: {â€¦}, CTR: {â€¦}, CTRGladman: {â€¦}, OFB: {â€¦}, â€¦}
+pad
+: 
+{Pkcs7: {â€¦}, AnsiX923: {â€¦}, Iso10126: {â€¦}, Iso97971: {â€¦}, ZeroPadding: {â€¦}, â€¦}
+x64
+: 
+{Word: {â€¦}, WordArray: {â€¦}}
+
+
+tc
+'d35db7e39ebbf3d001083105'
+ts
+{encrypt: Æ, decrypt: Æ}
+tu
+{stringify: Æ, parse: Æ}
+tl
+{stringify: Æ, parse: Æ}
+tf
+{_map: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=', _reverseMap: Array(123), stringify: Æ, parse: Æ}
+parse
+: 
+Æ (t)
+stringify
+: 
+Æ (t)
+_map
+: 
+"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+_reverseMap
+: 
+(123) [empty Ã 43, 62, empty Ã 3, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, empty Ã 3, 64, empty Ã 3, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, empty Ã 6, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+[[Prototype]]
+: 
+Object
+th
+{pad: Æ, unpad: Æ}
+tp
+Æ (r,e){return new p.HMAC.init(t,e).finalize(r)}
+td
+'0123456789ABCDEF'
+tA
+{iv: t.init, padding: {â€¦}}
+iv
+: 
+t.init
+sigBytes
+: 
+16
+words
+: 
+Array(4)
+0
+: 
+808530483
+1
+: 
+875902519
+2
+: 
+943276354
+3
+: 
+1128547654
+length
+: 
+4
+[[Prototype]]
+: 
+Array(0)
+[[Prototype]]
+: 
+Object
+padding
+: 
+pad
+: 
+Æ (t,r)
+unpad
+: 
+Æ (t)
+[[Prototype]]
+: 
+Object
+[[Prototype]]
+: 
+Object
+ï»¿
+
+w
+'DNsKKPRHfOTuFph6taPHkC+TbC6YUaXi1NfQv95Ez2k='
+x
+'d35db7e39ebbf3d001083105'
+
+v
+{ID: '7JLsB18MnA7GX3d6LxErT1sGT68xcVuOAoxz0b7vVzY=', SECRET: 'n9jH0yACW8YrgOBcM0v7u45+/bfozcSz8ZpvzGBXg3E='}
+
+
+
+M
+VerifyCap
+
+```
+
+### Zlib compression
+Zlib compression is done by function K
+
+hash+json is passed to funtion K ty(t) converts string to uintarray G.deflate zlib compresses the data
+
+```javascript
+// Example
+console.log(t)
+'99603d2757539169328062db7568942c{"TrackList":{"mc":"","tc":"","mu":"","te":"","mp":"","tmv":"","ks":"","fi":"","startTime":1781878507084},"TrackStartTime":1781878507084,"VerifyTime":1781878507099,"arg":"VzN0TRFfHQ5OVw=="}'
+
+console.log('Before Defalte',n);
+
+Before Deflate
+Uint8Array(221) [57, 57, 54, 48, 51, 100, 50, 55, 53, 55, 53, 51, 57, 49, 54, 57, 51, 50, 56, 48, 54, 50, 100, 98, 55, 53, 54, 56, 57, 52, 50, 99, 123, 34, 84, 114, 97, 99, 107, 76, 105, 115, 116, 34, 58, 123, 34, 109, 99, 34, 58, 34, 34, 44, 34, 116, 99, 34, 58, 34, 34, 44, 34, 109, 117, 34, 58, 34, 34, 44, 34, 116, 101, 34, 58, 34, 34, 44, 34, 109, 112, 34, 58, 34, 34, 44, 34, 116, 109, 118, 34, 58, 34, 34, 44, 34, 107, 115, 34, 58, â€¦]
+
+
+G.deflate(n)
+Uint8Array(149) [120, 156, 117, 141, 203, 10, 194, 48, 16, 69, 255, 101, 214, 89, 164, 73, 243, 152, 66, 183, 210, 133, 40, 106, 233, 190, 166, 173, 132, 18, 144, 36, 42, 90, 250, 239, 22, 146, 157, 184, 58, 247, 112, 47, 51, 136, 146, 242, 129, 41, 161, 4, 199, 66, 34, 103, 154, 74, 54, 92, 149, 144, 26, 75, 102, 22, 104, 125, 111, 230, 189, 13, 17, 170, 5, 156, 129, 10, 128, 64,
+204, 116, 143, 236, 99, 246, 123, 118, 247, 76, 97, 14, 137, 147, 77, 12, 177, 247, 177, 181, â€¦]
+
+
+G
+{constants: {â€¦}, default: {â€¦}, Deflate: Æ, deflate: Æ, deflateRaw: Æ, â€¦}
+Deflate
+: 
+Æ tW(t)
+constants
+: 
+{Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3, Z_FINISH: 4, â€¦}
+default
+: 
+{constants: {â€¦}, Deflate: Æ, deflate: Æ, deflateRaw: Æ, gzip: Æ}
+deflate
+: 
+Æ tQ(t,n)
+length
+: 
+2
+name
+: 
+"tQ"
+prototype
+: 
+{}
+arguments
+: 
+(...)
+caller
+: 
+(...)
+[[FunctionLocation]]
+: 
+ï¿¼pe.059.f123b6c8830e46be.js:1
+[[Prototype]]
+: 
+Æ ()
+[[Scopes]]
+: 
+Scopes[4]
+deflateRaw
+: 
+Æ (t,n)
+gzip
+: 
+Æ (t,n)
+__esModule
+: 
+true
+[[Prototype]]
+: 
+Object.
+
+
+
+```
+```javascript
+function tQ(t, n) {
+                    var e = new tW(n);
+                    if (e.push(t, !0),
+                    e.err)
+                        throw e.msg || R[e.err];
+                    return e.result
+                }
+```
+
+```javascript
+var tU = function(t) {   if ("function" == typeof TextEncoder && TextEncoder.prototype.encode)
+                        return (new TextEncoder).encode(t);
+                    var n, e, r, i, a, o = t.length, c = 0;
+                    for (i = 0; i < o; i++)
+                        55296 == (64512 & (e = t.charCodeAt(i))) && i + 1 < o && 56320 == (64512 & (r = t.charCodeAt(i + 1))) && (e = 65536 + (e - 55296 << 10) + (r - 56320),
+                        i++),
+                        c += e < 128 ? 1 : e < 2048 ? 2 : e < 65536 ? 3 : 4;
+                    for (n = new Uint8Array(c),
+                    a = 0,
+                    i = 0; a < c; i++)
+                        55296 == (64512 & (e = t.charCodeAt(i))) && i + 1 < o && 56320 == (64512 & (r = t.charCodeAt(i + 1))) && (e = 65536 + (e - 55296 << 10) + (r - 56320),
+                        i++),
+                        e < 128 ? n[a++] = e : (e < 2048 ? n[a++] = 192 | e >>> 6 : (e < 65536 ? n[a++] = 224 | e >>> 12 : (n[a++] = 240 | e >>> 18,
+                        n[a++] = 128 | e >>> 12 & 63),
+                        n[a++] = 128 | e >>> 6 & 63),
+                        n[a++] = 128 | 63 & e);
+                    return n
+                }
+                  , tj = function() {
+                    this.input = null,
+                    this.next_in = 0,
+                    this.avail_in = 0,
+                    this.total_in = 0,
+                    this.output = null,
+                    this.next_out = 0,
+                    this.avail_out = 0,
+                    this.total_out = 0,
+                    this.msg = "",
+                    this.state = null,
+                    this.data_type = 2,
+                    this.adler = 0
+                }
+                  , tP = Object.prototype.toString
+                  , tL = F.Z_NO_FLUSH
+                  , tR = F.Z_SYNC_FLUSH
+                  , tF = F.Z_FULL_FLUSH
+                  , tV = F.Z_FINISH
+                  , tG = F.Z_OK
+                  , tD = F.Z_STREAM_END
+                  , tq = F.Z_DEFAULT_COMPRESSION
+                  , tH = F.Z_DEFAULT_STRATEGY
+                  , tZ = F.Z_DEFLATED;
+```
+
+
+
+
+### Transformation of trackJson is done by fucntion nf
+
+```javascript
+While debugging founded some interesting 🧐 
+
+function nf(t) {
+            for (e = 9; e; )
+                switch (r = e >> 3,
+                i = 7 & e,
+                r) {
+                case 0:
+                    if (i < 6)
+                        if (i < 2)
+                            i >= 1 && (e = 10);
+                        else if (i > 3)
+                            if (i > 4) {
+                                e -= -3;
+                                try {
+                                    return function(t) {
+                                        var n, e, r, i;
+                                        for (e = 3; e; )
+                                            e < 1 || (e <= 1 ? (e += 3,
+                                            r = function(t, n) {
+                                                return i.B(te, n, t - -3)
+                                            }
+                                            ) : e < 4 ? e < 3 ? (e ^= 3,
+                                            i.B = function(t, n, e) {
+                                                return t(n, e)
+                                            }
+                                            ) : (i = {},
+                                            e += -1) : (n = tr[(r && r)(52, 64)](this, 26)[i.B(r, Math.floor(237), 19)](this, arguments),
+                                            e = 0));
+                                        return n
+                                    }(t)
+                                } catch (t) {
+                                    if (c.e(s, a))
+                                        throw t
+                                }
+                            } else
+                                !c * !c / 0 != 6 ? e ^= 1 : e += 3;
+                        else
+                            i > 2 ? (e = 14,
+                            c.D = function(t, n) {
+                                return t <= n
+                            }
+                            ) : (e += 14,
+                            c.n = function(t, n) {
+                                return t && n
+                            }
+                            );
+                    else
+                        i > 6 ? (e += -4,
+                        c.R = function(t, n) {
+                            return t !== n
+                        }
+                        ) : (a = c.y(c.W(c.c(arguments[o.call(1, 229, 51)], 1), 61), 58) > 58 && c.R(arguments[1], void 0) ? arguments[1] : 3,
+                        e = 1);
+                    break;
+                case 1:
+                    i > 5 ? i <= 6 ? (c.e = function(t, n) {
+                        return t === n
+                    }
+                    ,
+                    e -= 2) : (e -= 2,
+                    c.W = function(t, n) {
+                        return t * n
+                    }
+                    ) : i > 2 ? i < 5 ? i < 4 ? c.D(c.W(s - a, 50) + -6, -6) ? e ^= 15 : e = 0 : (o = function(t, n) {
+                        return c.n(te, te)(n, t - 1)
+                    }
+                    ,
+                    e ^= 10) : (e += -6,
+                    c.c = function(t, n) {
+                        return t - n
+                    }
+                    ) : i >= 1 ? i < 2 ? (e -= 7,
+                    c = {}) : (s = 1,
+                    e += 1) : (e = 11,
+                    s++);
+                    break;
+                case 2:
+                    e ^= 31,
+                    c.y = function(t, n) {
+                        return t + n
+                    }
+                }
+            return n
+        }
+```
+
+t = trackJson ( no Hash)
+
+This gets transformed into final data with this code  n = tr[(r && r)(52, 64)](this, 26)[i.B(r, Math.floor(237), 19)](this, arguments)
+console.log(n);
+JRMlgg0gGwVASQITewRNMEYjU1P7AMM7DGwWaiVYKOEKajqEHFh8RA1neYRfNAdR0XUQfSWw7h2PmQTbVpMbBWVFEHMdI1sENzToeHBDa0gdW0MRcxRcTwxEEp82HSfvd8K7Ri0JKSw7UW8jV31K21N3YXwcwT937U+vWYTVSox0hsdjInZNDW8WB3FzQ0Qkw0sBAAJLKT5CKRN3xwaLCX8bYxoLkQ9oKo5XTDQAZitmn0Qhdc/1Suikdj8OaWwhRjtEPlwSHmc=
+
+
+### Function nf behaviour 
+console.log(t)
+{TrackList: {â€¦}, TrackStartTime: 1782021569701, VerifyTime: 1782021569717, arg: 'ZjyUTmpv9h8dBw=='}
+
+nf(t)
+'JRMlgg0gGwVQeQITewRNMEbgUlclHnFEaXA2MWKm3fMsc1CfFaYZZjkfd3ASHyFF9bUHGneULV+hjAnpgZcDBJZsEmwZIGwMdCsQFi0xAFYVUUQYLwB4U9Y0MEgfFifSRy9VO85ZBx85VXMrSUtHPgKyQZJfzTF5DwWuBYXbfJwJmygJIBo0Y35rFRkTplQm0EhfERO9Kz98GhVWwX+bJjFlaxt4niZQxnEVEyYCehkVUVEwa8yXCjKUlyBtVk0KRx54Bg=='
+
+nf('abcdef123456789')
+'JRMkbRAlaBM6LgIPamJf6WPtb2UkBx5abH4bHmS2BThZbDKC7ah/Xt0bN595ORYu8k0JPXOv6X2Vr8cJg5E7BpBSMVY='      
+
+#### Tests: whether function nf uses zlib compression or not 
+#### Setup : In function K added logger that logs arguments
+
+nf(t)
+
+[FUNCTION K LOG] ARGUMENTS: 'c6d9b3718aa286fe7290fbab8e7f66e2{"TrackList":{"mc":"","tc":"","mu":"","te":"","mp":"","tmv":"","ks":"","fi":"","startTime":1782022235313},"TrackStartTime":1782022235313,"VerifyTime":1782022235354,"arg":"fMR+GVZSAyc4Ng=="}'
+
+nf('abcdef123456789')
+'JRMlZ25EVwYlLzQ+WWUF5GbgRHolfik0SDgDCUCqwMVUaUCpF3FzZgF1ZaB10PhN0EpybDWVO3Kb7fIc'
+
+[FUNCTION K LOG] ARGUMENTS: 
+'f4aaf499d633c77792ccf444f4dd0b33"abcdef123456789"'
+
+
+
+## Focus 
+function tr
+function nf
+function K
+
+## Part 1: Relation
+tr(26, 'test')
+'JRMkWWkGDigveSB2eABaM2cdclsffhBebh0gL0OrLcAuWVtA/UUFYQYbfIx0PgkT1VhpMBetN2vjjcQOioEnDQ=='
+
+nf('test')
+VM1491 pe.059.f123b6c8830e46be.js:11138 undefined
+'JRMkWWkGDigveSB2eABaM2cdclsffhBebh0gL0OrLcAuWVtA/UUFYQYbfIx0PgkT1VhpMBetN2vjjcQOioEnDQ=='
+
+
+## Most likely Reason 
+This code:
+
+n = tr[(r && r)(52, 64)](this, 26)[i.B(r, Math.floor(237), 19)](this, arguments), e = 0
+
+## My Thoughts: Correct me if im wrong
+
+i guess i.B = function(t, n, e) { return t(n, e) }
+and r = function(t, n) { return i.B(te, n, t + 3) }
+//   which simplifies to: r(t, n) = te(n, t + 3)
+
+r && r                          // r is truthy → evaluates to r itself
+r(52, 64)                       // call r with (52, 64)
+= te(64, 52 + 3)                // r(t,n) = te(n, t+3)
+= te(64, 55)                    // → returns a string (method name)
+
+Let's call this methodA = te(64, 55)
+
+tr[te(64, 55)]                  // look up methodA on tr object
+(this, 26)                      // call it with this=context, 26=selector
+
+Math.floor(237)                 // = 237 (obfuscation noise, pure 237)
+i.B(r, 237, 19)                 // i.B(t,n,e) = t(n,e)
+= r(237, 19)                    // call r with (237, 19)
+= te(19, 237 + 3)               // r(t,n) = te(n, t+3)
+= te(19, 240)                   // → returns a string (method name)
+
+Now debug result shows r(52, 64)
+'bind'
+r(237, 19)
+'apply'
+te(64, 55)
+'bind'
+te(19, 240)
+'apply
+
+// Resolved:
+n = tr.bind(this, 26).apply(this, arguments)
+
+Once again 
+n = tr(26, t) 
+
+
+
+
+## Part 2: Function tr behaviour
+
+The first tr call when i trigger verify captcha is:
+
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM41108:1 35 undefined undefined undefined undefined undefined
+true
+
+The second call is 
+
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM42148:1 9 'FqJB6iRNVYdEGpwb' '7JLsB18MnA7GX3d6LxErT1sGT68xcVuOAoxz0b7vVzY=' undefined undefined undefined
+'LTAI5tSEBwYMwVKAQGpxmvTd'
+
+Third call is 
+
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM42659:1 9 'FqJB6iRNVYdEGpwb' 'n9jH0yACW8YrgOBcM0v7u45+/bfozcSz8ZpvzGBXg3E=' undefined undefined undefined
+'YSKfst7GaVkXwZYvVihJsKF9r89koz'
+
+Fourth call is
+
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM44730:1 33 rA 𝑓 {$button: button#chat-captcha-trigger, captchaVerifyCallback: undefined, onBizResultCallback: undefined, success:, fail:} {TrackList: {â€¦}, TrackStartTime: 1782100652835, VerifyTime: 1782100652862} undefined undefined undefined
+Promise {<pending>}
+
+Fifth call is
+
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM47310:1 36 '6iL4denBvY' undefined undefined undefined undefined
+'U0dfV0VCIzM3OTVkMjgyNDJhMTE2MTliYzI1Zjc4NmY4NGU1M2Q0LWgtMTc4MjA5MzM1NzYyMC0wY2U5YzY2NTU2N2E0N2Q3OTBlNzNkNGE3MTgwNDMwNCNrUHNRYzl2NzB2YXBNdEl6YVVTWWZ4OUFndXBRSzd2RW5QOVpobmgxb1RsODBKWTVpYXFlQkhlWExIR2hDWUlmRHU2WkgrQXNQVk41SHNEWlB5MUNmOWVjVnExb1F6NGtwUkxJQkl1NXRhbVR4d0ZidERuY0ozT2FERTdqdDhtd2dIQ2QrYU5PQ0hlalJlU1A0L0ZoOTFUQzVFbWpCNzZMazQ1UzJvOHNWZmgrTHN0dWcvTW53emtBSUc1L0RBOXc5cGU0NWd1R0RKV21NSHBKTXJ5cm40VGpiTEsvcUxDa1hkcWlIdGkxbUpaRmxUd3N3MkVVcjAybVBxVGIzc3RZVS9INEQwSDVVZHpIUnovZ01jc1BmSnF3WEsyVmVVT2lNTjRYN3RXM3NqcWZadmxNcGtXelpiVnVMRWRLQytuY3ZqbDVZV0NGc0RuRjZrNGpYTkgyT25QdmY0bElIZCtxT25Fb2Ztem5KQ21YZ0JSTnNXK3h0WE90Wng5L0tXeVRWNVpYbHc1dmVHdk11bHhHQTQ0Z1ZZa0FqZExQdDN4ZktXTlFYUFB4K2lUNWdrbTZlRWx4QUV4TlVPanVaUzlHVW83NDcwN1RnbmQ4Y1lGelBxQUxjVDZUWXVoZEVLWEU0aXpoMThsSjR5UDgzSWpCeTFhWER3OVhnRUlLNk5HYzhxTTI1YlVlSVJpSGYwdXpLS0h5NlhGbjlWcmdJUGpUUFI0UmFFRW9XRUg3N0dwdVpkaDE0Yi9YRUQ2b3pUYWh5c3dpZVU2Sk9rZEZPWkRXdEtUbGx6MWMwZjRaWGpxaWIzN3VRRUo5NnJZUG80V2M2MGVXTDZFSVUvVDkraS9lb3J4SE8xTFhPVHoyYWhkYy92bWpIV3RPcWtFWlJXS1NBTFhvNmxuc0tuWjhoZmlxdnY3VGhJaVc0Wm9HZzJVMHJCeWtqajM3SnhBZnNmVXRQRm5oQ0JEWFVTakZhR3lMVjVKVmJjckp0UVdXMlRQRFBia0JrdXhwajI3WlNqV0NBRzBiSTlLRld1MUwzakhaVXEvQjYvYWZ6NmhFd1kyL0ZWczdzMDA0d3lsQnRHYVZtRC9zanlSMFF5STNEMTNtYlQ5d0pORUtpRFNLZ0U5dTVsTytuckswcDlxVUU5RCtVSmUyOUNXUnVWST0jNDQ4I2JiYjRlMmE5MjE5NzFmMDE2Nzk4NjRhZDk4MDEwOTlj'
+
+Sixth call is 
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM53514:1 38 
+Y {immediate: true, UserCertifyId: undefined, DeviceConfig: undefined, deviceConfig: undefined, DeviceToken: 'U0dfV0VCIzM3OTVkMjgyNDJhMTE2MTliYzI1Zjc4NmY4NGU1M2â€¦0OCMwZTI4OTcyMzdlZjcxYmRmMjkzMDA0YjRmNmQ4YTFiNg==', â€¦}
+ undefined undefined undefined undefined
+Promise {<fulfilled>: ''}
+
+This triggers a xhr request that isnt important so letsgo to next
+
+Seventh call 
+
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM53596:1 26 {TrackList: {â€¦}, TrackStartTime: 1782100652835, VerifyTime: 1782100652862, arg: 'JjObDGdh/ywcWQ=='} undefined undefined undefined undefined
+'JRMlgg0wDgRASAITRQpNEHEZuJsRBQZDtzsmAXNCL+49eDyEFKlLbSVgFq8aNiIiME9qeyVTKaKkiAQCrb8LIk1vCHMXJG0MOWjmeHE5GGodLkQQXSRFY+BCdntpe1A1ez2zBcgfEfU6c2QvXUxD9xl6TUFapw8G+yeTcaTTe5F3mQlxBGNkcnwbeHhhRzdYKVZ3+jKsH359DR9NImN7DT1alfp/cilvJJwZemkAVjVrnyssVj6RPRt0dV0ejXAUVxYEEnZxQEA='
+
+Eighth call converts into Uint8array 
+
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM53612:1 30 '9333ef7396dd56dbb9d6e8f31e8f6014{"TrackList":{"mc":"","tc":"","mu":"","te":"","mp":"","tmv":"","ks":"","fi":"","startTime":1782100652835},"TrackStartTime":1782100652835,"VerifyTime":1782100652862,"arg":"JjObDGdh/ywcWQ=="}' undefined undefined undefined undefined
+
+This returns uint8array
+
+Uint8Array(221)Â [57, 51, 51, 51, 101, 102, 55, 51, 57, 54, 100, 100, 53, 54, 100, 98, 98, 57, 100, 54, 101, 56, 102, 51, 49, 101, 56, 102, 54, 48, 49, 52, 123, 34, 84, 114, 97, 99, 107, 76, 105, 115, 116, 34, 58, 123, 34, 109, 99, 34, 58, 34, 34, 44, 34, 116, 99, 34, 58, 34, 34, 44, 34, 109, 117, 34, 58, 34, 34, 44, 34, 116, 101, 34, 58, 34, 34, 44, 34, 109, 112, 34, 58, 34, 34, 44, 34, 116, 109, 118, 34, 58, 34, 34, 44, 34, 107, 115, 34, 58,Â â€¦]
+
+Ninth call is 
+
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM54357:1 26 {TrackList: {â€¦}, TrackStartTime: 1782100652835, VerifyTime: 1782100652862, arg: 'JjObDGdh/ywcWQ=='} undefined undefined undefined undefined
+'JRMlgg0wDgRASAITRQpNEHEZuJsRBQZDtzsmAXNCL+49eDyEFKlLbSVgFq8aNiIiME9qeyVTKaKkiAQCrb8LIk1vCHMXJG0MOWjmeHE5GGodLkQQXSRFY+BCdntpe1A1ez2zBcgfEfU6c2QvXUxD9xl6TUFapw8G+yeTcaTTe5F3mQlxBGNkcnwbeHhhRzdYKVZ3+jKsH359DR9NImN7DT1alfp/cilvJJwZemkAVjVrnyssVj6RPRt0dV0ejXAUVxYEEnZxQEA='
+
+
+
+10th call is what sends the verifycaptchav3 request
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM56392:1 22 '{"sceneId":"didk33e0","certifyId":"6iL4denBvY","deviceToken":"U0dfV0VCIzM3OTVkMjgyNDJhMTE2MTliYzI1Zjc4NmY4NGU1M2Q0LWgtMTc4MjA5MzM1NzYyMC0wY2U5YzY2NTU2N2E0N2Q3OTBlNzNkNGE3MTgwNDMwNCNrUHNRYzl2NzB2YXBNdEl6YVVTWWZ4OUFndXBRSzd2RW5QOVpobmgxb1RsODBKWTVpYXFlQkhlWExIR2hDWUlmRHU2WkgrQXNQVk41SHNEWlB5MUNmOWVjVnExb1F6NGtwUkxJQkl1NXRhbVR4d0ZidERuY0ozT2FERTdqdDhtd2dIQ2QrYU5PQ0hlalJlU1A0L0ZoOTFUQzVFbWpCNzZMazQ1UzJvOHNWZmgrTHN0dWcvTW53emtBSUc1L0RBOXc5cGU0NWd1R0RKV21NSHBKTXJ5cm40VGpiTEsvcUxDa1hkcWlIdGkxbUpaRmxUd3N3MkVVcjAybVBxVGIzc3RZVS9INEQwSDVVZHpIUnovZ01jc1BmSnF3WEsyVmVVT2lNTjRYN3RXM3Nqb0wvdW4xWHpGSFh4OE5yQ1d3b093cVVJMkVPVmdKeCtBNTYvR3FETlQyTGU4WFdudFdPcDcxYjhvY0ZTQkhJNytlVUljaGJRendXN2lmcnBkNnU1WTArdEZacjYvQ1J3ajRsWUlTUkJ1WFg0VTdueTFYOGkyd3JESXdMWDZKZkQ0SHZha1c1dFdEM09QOUpTczNVelFTMjJwSXZjYkY4cHF3WHdxdFgwU3MzNC9Qa0hvRDBxL3NacFZsWDEzL1hBYTcvZ1VWUUVXRWxyTXVpZis3TS9jaEdLV0NqUXF6dnZ6WEFCaDJFY3padk5PNG9lLy8yN2lTQTk5SG5BZDRWWDlmczBOV1czUUxxd1lsR2N6R2o2NmxXVk0wYWxzbHl2YWFXMjBHcE9XVzBkdGFUVXpJZVZvVUZTUHlEZWkyTHNJaWtuS0VlWEJvM3RJOGJRdDcrSklTRHdwVlZhRVdEU1FXbFBJMXdEeG5pOUtqY3prNWZHcEgvUlpNNmlnUFU3VkZtL2xrdmFDL2lQWXVPMC9jNThnYk5JTnVqUWRvS1dZWjk3NE04WlhjOHdUYXJLb0R6MUVPSCs3L0h1VWlkRVVHQ2M3b3VXYXY4ajMvL2ZqWGdDZmFiQ01meEJFcWRoaExEZ1NXL3ozVENxQ1VNQ2pQdTNFdVRpNjRqcjBSeUJPaGl2THVSNnk5U0YydmltamdVVHovM3A2M3NzV0VSTFF4My81aEg1T1hNeENHSG5GL3p0dmdNSjRTUmNJZmlyST0jNDQ4Izg1YjgxN2M2YmM4NzNjNTlkZDQ2OWRiMzhmNTk5YjA0","data":"JRMlgg0wDgRASAITRQpNEHEZuJsRBQZDtzsmAXNCL+49eDyEFKlLbSVgFq8aNiIiME9qeyVTKaKkiAQCrb8LIk1vCHMXJG0MOWjmeHE5GGodLkQQXSRFY+BCdntpe1A1ez2zBcgfEfU6c2QvXUxD9xl6TUFapw8G+yeTcaTTe5F3mQlxBGNkcnwbeHhhRzdYKVZ3+jKsH359DR9NImN7DT1alfp/cilvJJwZemkAVjVrnyssVj6RPRt0dV0ejXAUVxYEEnZxQEA="}' YÂ {immediate: true, UserCertifyId: undefined, DeviceConfig: undefined, deviceConfig: undefined, DeviceToken: 'U0dfV0VCIzM3OTVkMjgyNDJhMTE2MTliYzI1Zjc4NmY4NGU1M2â€¦0OCMwZTI4OTcyMzdlZjcxYmRmMjkzMDA0YjRmNmQ4YTFiNg==',Â â€¦} undefined undefined undefined
+PromiseÂ {<pending>}
+
+Next call is likely signnature generator
+
+console.log(t,e,r,i,a,o);  tr(t, e, r, i, a, o);
+VM65765:1 13 {AccessKeyId: 'LTAI5tSEBwYMwVKAQGpxmvTd', SignatureMethod: 'HMAC-SHA1', SignatureVersion: '1.0', Format: 'JSON', Timestamp: '2026-06-22T04:09:14Z',Â â€¦}AccessKeyId: "LTAI5tSEBwYMwVKAQGpxmvTd"Action: "VerifyCaptchaV3"CaptchaVerifyParam: "{\"sceneId\":\"didk33e0\",\"certifyId\":\"6iL4denBvY\",\"deviceToken\":\"U0dfV0VCIzM3OTVkMjgyNDJhMTE2MTliYzI1Zjc4NmY4NGU1M2Q0LWgtMTc4MjA5MzM1NzYyMC0wY2U5YzY2NTU2N2E0N2Q3OTBlNzNkNGE3MTgwNDMwNCNrUHNRYzl2NzB2YXBNdEl6YVVTWWZ4OUFndXBRSzd2RW5QOVpobmgxb1RsODBKWTVpYXFlQkhlWExIR2hDWUlmRHU2WkgrQXNQVk41SHNEWlB5MUNmOWVjVnExb1F6NGtwUkxJQkl1NXRhbVR4d0ZidERuY0ozT2FERTdqdDhtd2dIQ2QrYU5PQ0hlalJlU1A0L0ZoOTFUQzVFbWpCNzZMazQ1UzJvOHNWZmgrTHN0dWcvTW53emtBSUc1L0RBOXc5cGU0NWd1R0RKV21NSHBKTXJ5cm40VGpiTEsvcUxDa1hkcWlIdGkxbUpaRmxUd3N3MkVVcjAybVBxVGIzc3RZVS9INEQwSDVVZHpIUnovZ01jc1BmSnF3WEsyVmVVT2lNTjRYN3RXM3Nqb0wvdW4xWHpGSFh4OE5yQ1d3b093cVVJMkVPVmdKeCtBNTYvR3FETlQyTGU4WFdudFdPcDcxYjhvY0ZTQkhJNytlVUljaGJRendXN2lmcnBkNnU1WTArdEZacjYvQ1J3ajRsWUlTUkJ1WFg0VTdueTFYOGkyd3JESXdMWDZKZkQ0SHZha1c1dFdEM09QOUpTczNVelFTMjJwSXZjYkY4cHF3WHdxdFgwU3MzNC9Qa0hvRDBxL3NacFZsWDEzL1hBYTcvZ1VWUUVXRWxyTXVpZis3TS9jaEdLV0NqUXF6dnZ6WEFCaDJFY3padk5PNG9lLy8yN2lTQTk5SG5BZDRWWDlmczBOV1czUUxxd1lsR2N6R2o2NmxXVk0wYWxzbHl2YWFXMjBHcE9XVzBkdGFUVXpJZVZvVUZTUHlEZWkyTHNJaWtuS0VlWEJvM3RJOGJRdDcrSklTRHdwVlZhRVdEU1FXbFBJMXdEeG5pOUtqY3prNWZHcEgvUlpNNmlnUFU3VkZtL2xrdmFDL2lQWXVPMC9jNThnYk5JTnVqUWRvS1dZWjk3NE04WlhjOHdUYXJLb0R6MUVPSCs3L0h1VWlkRVVHQ2M3b3VXYXY4ajMvL2ZqWGdDZmFiQ01meEJFcWRoaExEZ1NXL3ozVENxQ1VNQ2pQdTNFdVRpNjRqcjBSeUJPaGl2THVSNnk5U0YydmltamdVVHovM3A2M3NzV0VSTFF4My81aEg1T1hNeENHSG5GL3p0dmdNSjRTUmNJZmlyST0jNDQ4Izg1YjgxN2M2YmM4NzNjNTlkZDQ2OWRiMzhmNTk5YjA0\",\"data\":\"JRMlgg0wDgRASAITRQpNEHEZuJsRBQZDtzsmAXNCL+49eDyEFKlLbSVgFq8aNiIiME9qeyVTKaKkiAQCrb8LIk1vCHMXJG0MOWjmeHE5GGodLkQQXSRFY+BCdntpe1A1ez2zBcgfEfU6c2QvXUxD9xl6TUFapw8G+yeTcaTTe5F3mQlxBGNkcnwbeHhhRzdYKVZ3+jKsH359DR9NImN7DT1alfp/cilvJJwZemkAVjVrnyssVj6RPRt0dV0ejXAUVxYEEnZxQEA=\"}"CertifyId: "6iL4denBvY"Format: "JSON"SceneId: "didk33e0"SignatureMethod: "HMAC-SHA1"SignatureNonce: "99b9c6e8-31af-4fc5-8580-7de85d63d7ae"SignatureVersion: "1.0"Timestamp: "2026-06-22T04:09:14Z"Version: "2023-03-05"[[Prototype]]: Object 'YSKfst7GaVkXwZYvVihJsKF9r89koz' undefined undefined undefined
+'nrZkfG4wzTrgysSsOmq4HgEEwDE='
+
+
+tr(11) also generates signature 
+
+tr(14,e) url encodes e
+
+
+### Function K is called by this code with trackjson( hash included)
+
+
+
+Correct me if im wrong
+Subject:
+nj = [nx.A(K, er), nx.F(O, (td || td)(10, 78))];
+
+nx.A = function(t,n) { return t(n)}
+
+After resolving 
+nj = [K(er),nx.F(O, td(10,78))];
+
+console.log(er)
+
+3cf7c247ff063c6f65dadae1b49dae28{"TrackList":{"mc":"","tc":"","mu":"","te":"","mp":"","tmv":"","ks":"","fi":"","startTime":1782103567255},"TrackStartTime":1782103567255,"VerifyTime":1782103567286,"arg":"JSCTGEZbEAAgBQ=="} // MD5+JSON 
+
+td = function(t, n) {
+                            return nx.j(ti, ti)(nx.w(t, 7), n)
+                        }
+
+nx.j = function(t, n) {
+                                return t || n
+                            } 
+
+nx.w = function(t, n) {
+                            return t - n
+                        }
+
+
+// Resolution
+
+td = function(t, n) {
+    return ti(t - 7, n)
+}
+
+
+```javascript
+// Function ti string table
+
+function ti(t, n) {
+            var e = ["A=ZCC6i1", "4CavcUIg8/d", "Lk=/cq", "4S2djA0TjTE", "LkEZOv8wLQW", "IvWamq3P", "+UbStUZp", "Q6Zj53fOs3W", "+UsX", "tE2+QP2UU2E", "J5V94Pbh", "Vv8yVQe8oSe", "oq6UH5O1aqh", "13esP=M6G16", "Q37+Q3M", "B/fZMq", "MU7X8UM", "5EBQGJa16E5", "CU7xA=DGB28", "9SnuLknK9n", "aS5gaHBSOHO", "s1G7", "B3bAQ=e", "MC8F", "4YBbU/0psNO", "spDjBE1J62h", "OQEhOQOY", "lv67", "qmWwVUE6ovM", "ApIn5=bqB=h", "6PDNsNZp8Cq", "HH6d", "VSqZH08", "sCaysToRtUn", "8kp/8UhdcgW", "B1fBAG1cC=h", "oveX9vE0", "ovMeHSMXoAi", "OSeW", "UP7XxTfDCPq", "GE1C5PaBB2W", "qIe6HW", "53sGBEf1UYi", "Q27aQ1i", "VH5v", "3nEQ", "CpZ9+61H5=e", "sqOo3q", "VS=Koq", "UY2xU2I+x2i", "4HoKjHDTjPq", "m1po53qomBW", "G3GMq=imGqq", "xN1yMq", "30BM61fIOnq", "xTxfsJ1ZjU8", "UTpKMTBE", "GN1T811T8J8", "lvENO0iZcW", "Vg82cgVk", "sTGwMCfd", "MUZT4CxWjTV", "om=iLvW7Vkh", "Og3eoW", "og5kVknuLW", "9S1Sj/sdjNh", "366C3=745Ed", "5Bo1Cp1c8Ed", "xY1k", "LQWX", "VvOkVW", "8Top5P7g8Th", "9q5eLA3Y95", "tP7ptW", "A2BXG27vABO", "OS3N9AVbIve", "xNDT+m0XxPd", "6Ba3UBb4", "sT1Y8/1YGNq", "JmefLNZK", "mWOtanECq5i", "QTsP5n", "Cpbc56a6U16", "qZ3P", "HgebakEGLq", "56xGG/25", "4J5hMTZ7xCd", "ok8plSqT", "Ovn0M5", "8Nsgsn", "cAiF", "BEZ1a5", "GE1t63MV328", "tE2+U229AW", "lgWh", "IGo0", "J6E8QG6Vmq5", "53BIGB0y53O", "U=s9C=Z1U3M", "6/7hB/1X4/O", "LnMFcm=v", "8CGf+YM", "VnnRlQV2Lq", "jkxvt3bf+Yn", "cmiNLkpy", "+J7KtP7uM/d", "3Z6H3Z5AH5d", "OmEucQq", "mkEyOQd0JgM", "xCfNjn", "LAMqoS3/Vm3", "A1a6C5", "tNok4C7m4Jq", "3W6m3n66", "IIiUUnn83p3", "tJfT+Pxe8Un", "Bpo1Q=M", "LgWD", "oUOZaJ3gaQq", "cgqy9mMw95", "P5hV1GnLm5O", "m5qLI05qIn5", "QE0V52GZQEV", "AEZ9Bp5W", "QBI6Cq", "+Aqn9C=k+/8", "mS=RamOr", "4NsSt/Zw+YV", "Q=MN", "MC0XjU7dtTW", "cQOWOHE", "Up18ATfUCBW", "Q1bV62Zm", "sNbs8T7Ra2=", "G=BsC33", "tPbvtTe", "spxlG/xM6BE", "MT7T8n", "+CZh5Y20t5", "OHo5", "oki/V5", "IG56JWhIP5", "sB7UGnV", "M3bCx=BAA68", "Q=IMBn", "Lkebon", "amndLmdvVgV", "Jq=5InhMHWi", "tNxN", "t/xZtmx2xU=", "8QpgsU874Yq", "OPVgamapMY6", "G6o1UP0156=", "C17LtB7VQpM", "tNpdAUoXsUV", "C1a45=oPPpE", "tYxhMJoRxW", "+YBx8YGk4Cd", "lvnEOQeb", "+TIiQT7Dj/V", "UEG8CW", "Omd2", "lgWfaQnrLq", "66ffApoqBN8", "632o5505CB5", "53ZaG6f3", "9g5V9v=vaQW", "x67lG3h", "Q5O61G6cmEE", "j=2t567G4=E", "Q=aVB5", "VA3XVA3XVAq", "tJWTcPV2+Je", "tJaKjTGb45", "U3xj4=2+C65", "aH6hIkq/Vgq", "jUZD", "cAnZPmEKHgE", "oHhvLn", "C67s5=2A46d", "Qpbt", "C2Da5BxV", "lAnwoHdimSV", "tY2XMPxu", "CCGfx/fR", "L/D0GYI/8U8", "s3sJ51sU+=q", "41Bt6E1B623", "sYoZsYM", "61sLBW", "s/IN8Jxh8UW", "avqwaHeHOvq", "1qn13qV91n=", "6EbHU60PAEO", "3n5A3nncmZd", "4Jbj4Ybr", "x3ZX+CsZ4q", "MPxZtY2=tY6", "L0eZl5", "avZh+C0=OAO", "6CZ7tUBu6T3", "5p1JCBoa5SM", "8BIM8BxGtCe", "IWVcmJVMIWd", "cviy3Qhk", "xUa2xUbft3h", "xCINM5", "HZsL52aAQS=", "+P0psW", "CYGy8NZ74Ph", "A104BB7vCW", "qGO4In", "LUedLmpXLNW", "8Jpw83p=+NM", "cmiXHgqEck3", "UB7sG38k", "5=B55EBv61E", "GCfh4N1Y", "G2ej51IIBp8", "1GMC35MPHZh", "xCod4UGQ4n", "C2sxB3x+", "xJGT4PV", "G=7CQ1DaqNi", "m5ia3q", "xPBg8Ypnsq", "jYoH+NaD8/d", "VkONakeha5", "ag6=1m6YcQO", "OH=plvdgcCM", "G6pj", "I55CHqV3a5d", "VQ6ilnVfOg6", "MYakjNi", "GB0MBI2tB3n", "6YoP6=M", "MNbSt5", "B1bACpB6", "IgqYVm=0", "CE7ct1DOQBM", "4=0GxHqYLC=", "qIW53I5UJn", "9HOYon", "OCoitC0RBCn", "8J0/t5", "B3aA62GV", "tPaKxCGwt5", "oW5ravMwjgq", "JQhi9kOhVZO", "+Ps08n", "t/1dlvWR", "GBoPU2s66/8", "QNaS+TpujY=", "4UO0+A6n+SO", "+603G/sDsI5", "OQ0f", "6posQ/GsBBe", "5p7LG32o", "5=G1", "Vg5SaH6", "L55ravMwjgi", "s6aB5YBmB6V", "jUx5MUV", "QUbu4Y2Y+2n", "xTZbxn", "+EpjAPa4", "GYx2lW", "lviv", "Aq0GCBsHmW=", "MCIYjY1rs5", "M=1UBE29An", "sU0/sN0SxJE", "xT0k8YBKsT5", "j=GsB6GLG5", "VmEk", "lkOR9n", "BpDI", "4k8hov8dxk5", "oHnZ", "Q6b4t101CB=", "sN0TGNi", "+BZN+Uq"];
+            return (ti = function(n, r) {
+                var i = e[n -= 0];
+                if (i) {
+                    if (void 0 === ti.Sc) {
+                        ti.Sc = !0;
+                        var a = "c1f9f8dd8381fae0e6dfdc89ffd1d3fc85f7f1e186f2e5f388c3c49bfdc884dade80e3db8dc0e99fd9d6c9e8d5f4fbe2e7eac6d7f582fee4d487c2c7d8d2c5f6ca".match(/.{1,2}/g).map(function(t) {
+                            return parseInt(t, 16)
+                        });
+                        ti.lF = function(t, n) {
+                            for (var e, r, i = "", o = "", c = 0, s = 0; r = t.charAt(s++); ~r && (e = c % 4 ? 64 * e + r : r,
+                            c++ % 4) && (i += String.fromCharCode(255 & e >> (-2 * c & 6) ^ n)))
+                                r = a.indexOf(176 ^ r.charCodeAt(0));
+                            for (var u = 0, f = i.length; u < f; u++)
+                                o += "%" + ("00" + i.charCodeAt(u).toString(16)).slice(-2);
+                            return decodeURIComponent(o)
+                        }
+                        ,
+                        t = {}
+                    }
+                    var o = t[n];
+                    return o ? i = o : (i = ti.lF(i, r),
+                    t[n] = i),
+                    i
+                }
+            }
+            )(t, n)
+        }
+
+
+```
+
+#### Test and proofs
+td(10,78)
+'4c63f913'
+ti(3,78)
+'4c63f913'
+ti(78)
+'gqfbqfG`'
+ti(3)
+'4c63f913'
+
+#### Looks like ti function focuses on first argument
+
+ti(7)
+'ML_@JLdL'
+ti(7,6)
+'ML_@JLdL'
+ti(6)
+'mobile'
+ti(6,7)
+'mobile'
+
+console.log(td(10,78)) 
+'4c63f913'
+
+nx.F = function(t, n) {
+                            return t + n
+                        }
+
+// Resolution
+
+nj = [K(er),O+td(10,78)];
+
+O = td(219, 14)
+'3e627e1b'
+
+// Resolution
+ nj = [K(er),'3e627e1b4c63f913'];
+
+console.log(nj)
+[
+    "eJx1jcEKwjAQRP9lzzm4aWLSQg+9iIgg2CJe05KWUCKaREVK/91AchI8vX3MsEO5LnuumGC8ZIgo+bBhapS66OUWBVugc2qYj8YHqBawA1QABEKmfWbX2e/Z7Ssds08cTaIPyoXO2NhHIWlcLLhEKVaShto/OYGLdmb8/EYUKQHlpvj9cH60++u72TXN7TTVNaxfJOs7Cg==",
+    "3e627e1b4c63f913"
+]
+```bash
+~ $ echo eJx1jcEKwjAQRP9lzzm4aWLSQg+9iIgg2CJe05KWUCKaREVK/91AchI8vX3MsEO5LnuumGC8ZIgo+bBhapS66OUWBVugc2qYj8YHqBawA1QABEKmfWbX2e/Z7Ssds08cTaIPyoXO2NhHIWlcLLhEKVaShto/OYGLdmb8/EYUKQHlpvj9cH60++u72TXN7TTVNaxfJOs7Cg== | base64 -d | xxd
+00000000: 789c 758d c10a c230 1044 ff65 cf39 b869  x.u....0.D.e.9.i
+00000010: 62d2 420f bd88 8820 d822 5ed3 9296 5022  b.B.... ."^...P"                                                                                                       00000020: 9a44 454a ffdd 4072 123c bd7d ccb0 43b9  .DEJ..@r.<.}..C.
+00000030: 2e7b ae98 60bc 6488 28f9 b061 6a94 bae8  .{..`.d.(..aj...                                                                                                       00000040: e516 055b a073 6a98 8fc6 07a8 16b0 0354  ...[.sj........T
+00000050: 0004 42a6 7d66 d7d9 efd9 ed2b 1db3 4f1c  ..B.}f.....+..O.
+00000060: 4da2 0fca 85ce d8d8 4721 695c 2cb8 4429  M.......G!i\,.D)
+00000070: 5692 86da 3f39 818b 7666 fcfc 4614 2901  V...?9..vf..F.).
+00000080: e5a6 f8fd 707e b4fb ebbb d935 cded 34d5  ....p~.....5..4.
+00000090: 35ac 5f24 eb3b 0a                        5._$.;.
+~ $
+```
+
+```python
+>>> import zlib                                                                                                                                                          
+>>> import base64
+>>> b64_data = "eJx1jcEKwjAQRP9lzzm4aWLSQg+9iIgg2CJe05KWUCKaREVK/91AchI8vX3MsEO5LnuumGC8ZIgo+bBhapS66OUWBVugc2qYj8YHqBawA1QABEKmfWbX2e/Z7Ssds08cTaIPyoXO2NhHIWlcLLhEKVaSh\
+to/OYGLdmb8/EYUKQHlpvj9cH60++u72TXN7TTVNaxfJOs7Cg=="                                                                                                                      ...
+>>> decompressed = zlib.decompress(base64.b64decode(b64_data))                                                                                                            >>> print(decompressed.decode('utf-8'))
+25e9b5a47459411185c04af8e3b86174{"TrackList":{"mc":"","tc":"","mu":"","te":"","mp":"","tmv":"","ks":"","fi":"","startTime":1782111358187},"TrackStartTime":1782111358187,"VerifyTime":1782111358212,"arg":"JRqSHXwAFAAnOg=="}
+
+```
+
+
+
+Is this md5 calculation  or custom hash by VM? idk
+er = P(0, [], F, V, ez, [er, (td && td)(77, 19)]) + er
+
+
+```javascript
+# Function P
+function t(n, e, r, i, a, o) {
+            var c, s, u, f, l, h, p, d, A;
+            function v(t) {
+                var n, e;
+                for (e = 0,
+                n = []; (e - t) * 10 + -30 < -30; e++)
+                    n.push(e);
+                return n
+            }
+            function b(t, n) {
+                return t && "__proto__" != n ? t.hasOwnProperty(n) ? t : b(Object.getPrototypeOf(t), n) : null
+            }
+            for ((c = Object.create(a.s || {}))._ = window,
+            c["*"] = a.t || this,
+            a.e && (c[i[r[n + 1]]] = a.e),
+            c.arguments = o,
+            s = 0,
+            u = void 0; (n - r.length) * 93 + 61 < 61; )
+                if (10 == (A = r[n++]) ? (f = e.pop(),
+                h = ((l = e.pop()) - f) * 48 + -38 <= -38,
+                (p = r[n++]) && e.push(h)) : 20 == A ? (f = e.pop(),
+                h = ~(~(l = e.pop()) | ~f),
+                (p = r[n++]) && e.push(h)) : 28 == A ? (f = e.pop(),
+                l = r[n++],
+                f || (n = l)) : 39 == A ? (f = r[n++],
+                l = r[n++],
+                h = r[n++],
+                p = r[n++],
+                n = f,
+                function() {
+                    try {
+                        ((f = t(l, e, r, i, {
+                            s: c,
+                            t: c["*"]
+                        })) - 0) * 21 + -79 > -79 && (s = 1,
+                        u = a.r ? e.pop() : f)
+                    } catch (n) {
+                        ((f = t(h, e, r, i, {
+                            s: c,
+                            t: c["*"],
+                            e: n
+                        })) - 0) * 50 + -57 > -57 && (s = 1,
+                        u = a.r ? e.pop() : f)
+                    } finally {
+                        ((f = t(p, e, r, i, {
+                            s: c,
+                            t: c["*"]
+                        })) - 0) * 30 + -22 > -22 && (s = 1,
+                        u = a.r ? e.pop() : f)
+                    }
+                }()) : 44 == A ? e.push({}) : 48 == A ? (f = e.pop(),
+                h = (l = e.pop()) >> f,
+                (p = r[n++]) && e.push(h)) : 37 == A ? (f = r[n++],
+                (l = t(n, e, r, i, {
+                    s: c,
+                    t: c["*"]
+                })) ? 1 === l ? s = 1 : (s = 1,
+                u = a.r ? e.pop() : l) : n = f) : 55 == A ? (f = r[n++],
+                l = [],
+                v(f).forEach(function() {
+                    l.unshift(e.pop())
+                }),
+                r[n++] && e.push(l)) : 52 == A ? (l = !(f = e.pop()),
+                r[n++] && e.push(l)) : 9 == A ? (f = e.pop(),
+                h = ((l = e.pop()) - f) * 20 + 93 < 93,
+                (p = r[n++]) && e.push(h)) : 50 == A ? (f = r[n++],
+                l = e.pop(),
+                h = e.pop(),
+                o = [],
+                v(f).forEach(function() {
+                    o.unshift(e.pop())
+                }),
+                p = null === h ? l.apply(c, o) : h[l].apply(h, o),
+                r[n++] && e.push(p)) : 19 == A ? function() {
+                    throw e.pop()
+                }() : 27 == A ? (f = e.pop(),
+                l = e.pop(),
+                h = e.pop(),
+                (p = l === c && b(l, f) || l)[f] = h,
+                (d = r[n++]) && e.push(h)) : 7 == A ? (f = e.pop(),
+                l = r[n++],
+                h = r[n++],
+                p = function(n) {
+                    return function() {
+                        return t(n, e, r, i, {
+                            s: c,
+                            t: this,
+                            r: 1
+                        }, arguments)
+                    }
+                }(l),
+                h ? e.push(p) : c[f] = p) : 0 == A ? (f = e.pop(),
+                h = (l = e.pop()) >>> f,
+                (p = r[n++]) && e.push(h)) : 47 == A ? (f = e.pop(),
+                l = e.pop(),
+                (h = e.pop())[l] = f,
+                r[n++] && e.push(h)) : 40 == A ? (f = e.pop(),
+                h = -95 * (l = e.pop()) / (-95 * f),
+                (p = r[n++]) && e.push(h)) : 35 == A ? (l = typeof (f = e.pop()),
+                r[n++] && e.push(l)) : 32 == A ? (f = e.pop(),
+                l = r[n++],
+                f && (n = l)) : 38 == A ? (f = e.pop(),
+                h = ~(~(l = e.pop()) & ~f),
+                (p = r[n++]) && e.push(h)) : 30 == A ? e.push(c) : 21 == A ? c[l = i[f = r[n++]]] = void 0 : 5 == A ? (l = ~(f = e.pop()),
+                r[n++] && e.push(l)) : 3 == A ? (f = r[n++],
+                l = e.pop(),
+                p = b(h = e.pop(), l) || h,
+                d = f ? --p[l] : p[l]--,
+                r[n++] && e.push(d)) : 56 == A ? (f = e.pop(),
+                l = e.pop(),
+                r[n++] && e.push(l[f])) : 34 == A ? e.push(window) : 26 == A ? (f = e.pop(),
+                h = ((l = e.pop()) + 12) * f - 12 * f,
+                (p = r[n++]) && e.push(h)) : 23 == A ? (f = e.pop(),
+                h = (l = e.pop()) & ~f | ~l & f,
+                (p = r[n++]) && e.push(h)) : 45 == A ? (f = e.pop(),
+                l = e.pop(),
+                h = delete l[f],
+                r[n++] && e.push(h)) : 49 == A ? (f = r[n++],
+                o || (o = [].concat(e)),
+                v(f + 1).forEach(function(t) {
+                    c[e.pop()] = o[-((-51 * f - -51 * t) / 51)]
+                })) : 46 == A ? (f = e.pop(),
+                h = (l = e.pop())instanceof f,
+                (p = r[n++]) && e.push(h)) : 8 == A ? (f = r[n++],
+                l = e.pop(),
+                p = b(h = e.pop(), l) || h,
+                d = f ? ++p[l] : p[l]++,
+                r[n++] && e.push(d)) : 36 == A ? (f = e.pop(),
+                h = (l = e.pop()) !== f,
+                (p = r[n++]) && e.push(h)) : 33 == A ? (f = i[r[n++]],
+                h = (l = c)[f],
+                r[n++] && e.push(h)) : 2 == A ? (f = e.pop(),
+                h = (l = e.pop()) << f,
+                (p = r[n++]) && e.push(h)) : 4 == A || (41 == A ? (f = e.pop(),
+                l = e.pop(),
+                h = r[n++],
+                o = [],
+                v(h).forEach(function() {
+                    o.unshift(e.pop())
+                }),
+                p = new (v(h).reduce(function(t, n) {
+                    return t.bind(l, o[n])
+                }, l[f])),
+                r[n++] && e.push(p)) : 11 == A ? s = 1 : 14 == A ? (f = e.pop(),
+                l = e.pop(),
+                h = r[n++],
+                -1 == l && (l = h),
+                n = l = f[l]) : 15 == A ? (f = e.pop(),
+                h = (l = e.pop()) === f,
+                (p = r[n++]) && e.push(h)) : 12 == A ? (f = e.pop(),
+                h = ((l = e.pop()) - f) * 92 + 67 >= 67,
+                (p = r[n++]) && e.push(h)) : 54 == A ? (f = e.pop(),
+                l = void 0,
+                r[n++] && e.push(l)) : 53 == A ? (f = r[n++],
+                l = e.pop(),
+                v(f).forEach(function() {
+                    e.pop()
+                }),
+                r[n++] && e.push(l)) : 24 == A ? (f = e.pop(),
+                h = ((l = e.pop()) - f) * 36 + 69 > 69,
+                (p = r[n++]) && e.push(h)) : 42 == A ? (f = e.pop(),
+                h = (l = e.pop())in f,
+                (p = r[n++]) && e.push(h)) : 18 == A ? (f = e.pop(),
+                h = (l = e.pop()) + f,
+                (p = r[n++]) && e.push(h)) : 16 == A ? (f = r[n++],
+                l = "",
+                v(f).forEach(function() {
+                    l += e.pop()
+                }),
+                r[n++] && e.push(l)) : 22 == A ? (f = e.pop(),
+                h = -((-70 * (l = e.pop()) - -70 * f) / 70),
+                (p = r[n++]) && e.push(h)) : 25 == A ? (s = 1,
+                u = a.r ? e.pop() : r[n++]) : 51 == A ? (f = e.pop(),
+                h = (l = e.pop()) != f,
+                (p = r[n++]) && e.push(h)) : 31 == A ? n = f = r[n++] : 29 == A ? (f = e.pop(),
+                h = (l = e.pop()) == f,
+                (p = r[n++]) && e.push(h)) : 17 == A ? (f = e.pop(),
+                h = -(-(l = e.pop()) % f),
+                (p = r[n++]) && e.push(h)) : 6 == A ? (f = r[n++],
+                void 0 === (l = t(n, e, r, i, {
+                    s: c,
+                    t: c["*"]
+                })) ? n = f : (s = 1,
+                u = a.r ? e.pop() : l)) : 43 == A ? (f = r[n++],
+                e.push(i[f])) : 13 == A ? e.push(e[-((-41 * e.length - -41) / 41)]) : 1 == A ? e.pop() : function() {
+                    throw Error()
+                }()),
+                s)
+                    return u
+        }
+
+```
+### # value of ez
+{
+    "r": 1
+}
+
+### Value of td(77,19)
+'0000'
+
+### Value of V
+[
+    "o",
+    "r",
+    "a",
+    "m",
+    "C",
+    "e",
+    "f",
+    "i",
+    "p",
+    "h",
+    "d",
+    "",
+    0,
+    147,
+    "n",
+    "fromCharCode",
+    252,
+    241,
+    249,
+    246,
+    240,
+    231,
+    "map",
+    "join",
+    202,
+    172,
+    191,
+    164,
+    169,
+    190,
+    163,
+    165,
+    87,
+    56,
+    53,
+    61,
+    50,
+    52,
+    35,
+    156,
+    250,
+    233,
+    242,
+    255,
+    232,
+    245,
+    243,
+    108,
+    24,
+    3,
+    63,
+    30,
+    5,
+    2,
+    11,
+    206,
+    167,
+    160,
+    170,
+    171,
+    182,
+    129,
+    168,
+    124,
+    12,
+    14,
+    19,
+    8,
+    25,
+    33,
+    84,
+    79,
+    69,
+    68,
+    71,
+    72,
+    "_",
+    55,
+    64,
+    94,
+    89,
+    83,
+    88,
+    1,
+    22,
+    97,
+    127,
+    120,
+    114,
+    121,
+    46,
+    117,
+    65,
+    76,
+    75,
+    77,
+    90,
+    74,
+    115,
+    54,
+    95,
+    82,
+    110,
+    29,
+    36,
+    166,
+    152,
+    159,
+    149,
+    158,
+    134,
+    78,
+    66,
+    85,
+    119,
+    20,
+    26,
+    18,
+    44,
+    67,
+    70,
+    73,
+    104,
+    113,
+    162,
+    205,
+    192,
+    200,
+    199,
+    193,
+    214,
+    130,
+    234,
+    239,
+    238,
+    230,
+    215,
+    207,
+    204,
+    151,
+    211,
+    248,
+    244,
+    226,
+    227,
+    181,
+    146,
+    132,
+    148,
+    133,
+    91,
+    93,
+    86,
+    201,
+    253,
+    247,
+    178,
+    221,
+    150,
+    153,
+    136,
+    220,
+    184,
+    137,
+    145,
+    161,
+    157,
+    131,
+    179,
+    154,
+    142,
+    135,
+    28,
+    125,
+    106,
+    123,
+    155,
+    128,
+    32,
+    45,
+    37,
+    42,
+    59,
+    111,
+    57,
+    38,
+    40,
+    216,
+    185,
+    174,
+    177,
+    183,
+    141,
+    195,
+    236,
+    251,
+    228,
+    212,
+    210,
+    218,
+    173,
+    188,
+    138,
+    139,
+    143,
+    144,
+    175,
+    187,
+    180,
+    4,
+    7,
+    34,
+    194,
+    223,
+    229,
+    15,
+    49,
+    58,
+    96,
+    10,
+    101,
+    16,
+    41,
+    107,
+    48,
+    9,
+    31,
+    27,
+    21,
+    6,
+    109,
+    140,
+    224,
+    225,
+    118,
+    122,
+    196,
+    197,
+    203,
+    186,
+    189,
+    176,
+    13,
+    17,
+    43,
+    99,
+    23,
+    47,
+    103,
+    112,
+    237,
+    80,
+    105,
+    102,
+    98,
+    213,
+    126,
+    81,
+    100,
+    92,
+    116,
+    51,
+    62,
+    219,
+    209,
+    254,
+    208,
+    39,
+    222,
+    198,
+    217,
+    235,
+    false,
+    60,
+    "Boolean",
+    "Number",
+    "String",
+    "j",
+    "t",
+    "u",
+    "arguments",
+    "s",
+    "random",
+    256,
+    "floor",
+    "push",
+    "length",
+    "0",
+    "toString",
+    "y",
+    "charCodeAt"
+]
+
+even when __ALIYUN_CRYPT was not defined in the scope it caculated exact md5
+
+Also found salt mystery that vm likely uses some kind of special parsing salt  which returns 0 so when i tested salt = 00 , 000 , 0000000 all worked but using 0010 doesnt but using 0000000000001 works
+P(0, [], F, V,ez, [input,'0000000000000000000001'])
+'9333ef7396dd56dbb9d6e8f31e8f6014'
+
+
+
+# Note whn using function ti first  use a valid xor key only then use single arguments 
