@@ -68,11 +68,8 @@ function generateArg(certifyId, constant) {
 // v[5] = ["HtnQAvpxNp", "4xrihv8zb8tf1mfj"]
 var certifyId = "HtnQAvpxNp";
 var constant  = "4xrihv8zb8tf1mfj";
-var expected  = "UhF1VWaUYJiOaQ==";
 
 var result = generateArg(certifyId, constant);
 console.log("certifyId : " + certifyId);
 console.log("constant  : " + constant);
-console.log("Expected  : " + expected);
 console.log("Result    : " + result);
-console.log("Match     : " + (result === expected));
