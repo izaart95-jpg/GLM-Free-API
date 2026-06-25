@@ -9,7 +9,7 @@
 6. [DeviceData Generation & Encryption](#6-devicedata-generation--encryption-aliyuncaptchajs)
 7. [Signature and Nonce Generation](#7-signature-and-nonce-generation-aliyuncaptchajs)
 8. [Traceless Captcha Flow](#8-traceless-captchaflow)
-9. [Verify Captcha Payload Generation](#9-verify-captcha-payload-generation-pehashjs)
+9. [Verify Captcha Payload Observation](#9-verify-captcha-payload-observation-pehashjs)
 10. [Zlib Compression & Data Transformation](#10-zlib-compression--data-transformation)
 11. [VM-Based Hash Calculation Reverse Engineering](#11-vm-based-hash-calculation-reverse-engineering)
 12. [TrackJson `arg` Value Generation](#12-trackjson-arg-value-generation)
@@ -1271,7 +1271,7 @@ Decoded:
 
 --- 
 
-## 9. Verify Captcha Payload Generation [pe.<hash>.js]
+## 9. Verify Captcha Payload Observation [pe.<hash>.js]
 
 ### The request
 
