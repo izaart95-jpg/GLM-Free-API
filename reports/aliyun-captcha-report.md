@@ -1974,7 +1974,7 @@ def make_captcha_request(access_key_id, secret_key, scene_id, device_token):
 access_key = "LTAI5tSEBwYMwVKAQGpxmvTd"  # Your AccessKeyId
 secret = "YSKfst7GaVkXwZYvVihJsKF9r89koz"  # You need the actual secret key
 scene = "didk33e0"
-device_token = Insert-Dev-Token-Here"
+device_token = "Insert-Dev-Token-Here"
 
 response = make_captcha_request(access_key, secret, scene, device_token)
 print(response.json())
