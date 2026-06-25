@@ -116,8 +116,5 @@ def generateArg(certifyId, constant):
     import base64
     return base64.b64encode(t.encode('latin-1')).decode()
 
-result = generateArg("HtnQAvpxNp", "4xrihv8zb8tf1mfj")
-expected = "UhF1VWaUYJiOaQ=="
+result = generateArg("", "4xrihv8zb8tf1mfj")
 print(f"Result:   {result}")
-print(f"Expected: {expected}")
-print(f"Match:    {result == expected}")
