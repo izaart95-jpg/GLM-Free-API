@@ -1905,734 +1905,9 @@ var P = function t(n, e, r, i, a, o) {
 10. Tracing back what h string should decode to - re-examine the XOR function used for h using: `decode_h.py`
 11. Recalculating h string with correct XOR key 210 using: `h_calculator.py`
 12. Tracing the actual hash algorithm - look at what happens with 'e', 'f', 'C' which are the core of the hash using: `hash_alg_finder.py`
-14. Tracing the actual VM hash algorithm - let's look at what 'y' function does at PC 15982 using:
-```bash
-python3 << 'PYEOF'
-import json
-
-with open('F_bytecode.txt') as f:
-    F = json.load(f)
-
-V = [
-    "o","r","a","m","C","e","f","i","p","h","d","",0,147,"n","fromCharCode",
-    252,241,249,246,240,231,"map","join",202,172,191,164,169,190,163,165,
-    87,56,53,61,50,52,35,156,250,233,242,255,232,245,243,108,24,3,63,30,
-    5,2,11,206,167,160,170,171,182,129,168,124,12,14,19,8,25,33,84,79,69,
-    68,71,72,"_",55,64,94,89,83,88,1,22,97,127,120,114,121,46,117,65,76,
-    75,77,90,74,115,54,95,82,110,29,36,166,152,159,149,158,134,78,66,85,
-    119,20,26,18,44,67,70,73,104,113,162,205,192,200,199,193,214,130,234,
-    239,238,230,215,207,204,151,211,248,244,226,227,181,146,132,148,133,
-    91,93,86,201,253,247,178,221,150,153,136,220,184,137,145,161,157,131,
-    179,154,142,135,28,125,106,123,155,128,32,45,37,42,59,111,57,38,40,
-    216,185,174,177,183,141,195,236,251,228,212,210,218,173,188,138,139,
-    143,144,175,187,180,4,7,34,194,223,229,15,49,58,96,10,101,16,41,107,
-    48,9,31,27,21,6,109,140,224,225,118,122,196,197,203,186,189,176,13,17,
-    43,99,23,47,103,112,237,80,105,102,98,213,126,81,100,92,116,51,62,219,
-    209,254,208,39,222,198,217,235,False,60,"Boolean","Number","String",
-    "j","t","u","arguments","s","random",256,"floor","push","length","0",
-    "toString","y","charCodeAt"
-]
-
-# Let's trace the bytecodes from 15982 onward (the main y function)
-# Entry is at 15989 (from F[15986]=15989)
-print("F[15982:16020]:")
-for i in range(15982, 16020):
-    print(f"  F[{i}] = {F[i]}", end="")
-    if F[i] == 43 and i+1 < len(F):
-        vi = F[i+1]
-        if vi < len(V):
-            print(f"  (PUSH_CONST V[{vi}]={repr(V[vi])})", end="")
-    print()
-
-print("\n\nTracing y function body (PC 15989+):")
-# From the disasm we saw:
-# 15989: PUSH_CONST V[0]='o', PUSH_CONST V[1]='r', BIND_ARGS 1
-# Then: VAR_DECL o, r, a, m, C, e, f, i (local scope vars)
-# Then: ...
-
-# Let me decode the exact sequence at 15989
-for i in range(15989, 16075):
-    print(f"  F[{i}] = {F[i]}", end="")
-    if F[i] in [43, 33, 21, 27, 56]:
-        vi = F[i+1] if i+1 < len(F) else -1
-        if vi < len(V) and vi >= 0:
-            print(f"  -> V[{vi}]={repr(V[vi])}", end="")
-    print()
-
-PYEOF
-Output
-
-F[15982:16020]:
-  F[15982] = 43  (PUSH_CONST V[289]='y')
-  F[15983] = 289
-  F[15984] = 7
-  F[15985] = 15989
-  F[15986] = 0
-  F[15987] = 31
-  F[15988] = 16815
-  F[15989] = 43  (PUSH_CONST V[0]='o')
-  F[15990] = 0
-  F[15991] = 43  (PUSH_CONST V[1]='r')
-  F[15992] = 1
-  F[15993] = 49
-  F[15994] = 1
-  F[15995] = 21
-  F[15996] = 2
-  F[15997] = 21
-  F[15998] = 3
-  F[15999] = 21
-  F[16000] = 4
-  F[16001] = 21
-  F[16002] = 5
-  F[16003] = 21
-  F[16004] = 6
-  F[16005] = 21
-  F[16006] = 14
-  F[16007] = 33
-  F[16008] = 0
-  F[16009] = 1
-  F[16010] = 30
-  F[16011] = 43  (PUSH_CONST V[10]='d')
-  F[16012] = 10
-  F[16013] = 50
-  F[16014] = 1
-  F[16015] = 1
-  F[16016] = 30
-  F[16017] = 43  (PUSH_CONST V[279]='u')
-  F[16018] = 279
-  F[16019] = 50
-
-
-Tracing y function body (PC 15989+):
-  F[15989] = 43  -> V[0]='o'
-  F[15990] = 0
-  F[15991] = 43  -> V[1]='r'
-  F[15992] = 1
-  F[15993] = 49
-  F[15994] = 1
-  F[15995] = 21  -> V[2]='a'
-  F[15996] = 2
-  F[15997] = 21  -> V[3]='m'
-  F[15998] = 3
-  F[15999] = 21  -> V[4]='C'
-  F[16000] = 4
-  F[16001] = 21  -> V[5]='e'
-  F[16002] = 5
-  F[16003] = 21  -> V[6]='f'
-  F[16004] = 6
-  F[16005] = 21  -> V[14]='n'
-  F[16006] = 14
-  F[16007] = 33  -> V[0]='o'
-  F[16008] = 0
-  F[16009] = 1
-  F[16010] = 30
-  F[16011] = 43  -> V[10]='d'
-  F[16012] = 10
-  F[16013] = 50
-  F[16014] = 1
-  F[16015] = 1
-  F[16016] = 30
-  F[16017] = 43  -> V[279]='u'
-  F[16018] = 279
-  F[16019] = 50
-  F[16020] = 1
-  F[16021] = 1
-  F[16022] = 30
-  F[16023] = 43  -> V[0]='o'
-  F[16024] = 0
-  F[16025] = 27  -> V[0]='o'
-  F[16026] = 0
-  F[16027] = 30
-  F[16028] = 43  -> V[0]='o'
-  F[16029] = 0
-  F[16030] = 56  -> V[1]='r'
-  F[16031] = 1
-  F[16032] = 43  -> V[286]='length'
-  F[16033] = 286
-  F[16034] = 56  -> V[1]='r'
-  F[16035] = 1
-  F[16036] = 30
-  F[16037] = 43  -> V[2]='a'
-  F[16038] = 2
-  F[16039] = 27  -> V[0]='o'
-  F[16040] = 0
-  F[16041] = 30
-  F[16042] = 43  -> V[1]='r'
-  F[16043] = 1
-  F[16044] = 56  -> V[1]='r'
-  F[16045] = 1
-  F[16046] = 43  -> V[286]='length'
-  F[16047] = 286
-  F[16048] = 56  -> V[1]='r'
-  F[16049] = 1
-  F[16050] = 30
-  F[16051] = 43  -> V[3]='m'
-  F[16052] = 3
-  F[16053] = 27  -> V[0]='o'
-  F[16054] = 0
-  F[16055] = 55
-  F[16056] = 0
-  F[16057] = 1
-  F[16058] = 30
-  F[16059] = 43  -> V[5]='e'
-  F[16060] = 5
-  F[16061] = 27  -> V[0]='o'
-  F[16062] = 0
-  F[16063] = 6
-  F[16064] = 16123
-  F[16065] = 21  -> V[0]='o'
-  F[16066] = 0
-  F[16067] = 43  -> V[12]=0
-  F[16068] = 12
-  F[16069] = 30
-  F[16070] = 43  -> V[0]='o'
-  F[16071] = 0
-  F[16072] = 27  -> V[0]='o'
-  F[16073] = 0
-  F[16074] = 37
-```
-
-Result: function y calculates hash with custom cipher
-
-14. Now we need full disassembly of the y() function from PC 15989 to 16838 we can get that using:
-```bash
-python3 << 'PYEOF'
-import json
-
-with open('F_bytecode.txt') as f:
-    F = json.load(f)
-
-V = [
-    "o","r","a","m","C","e","f","i","p","h","d","",0,147,"n","fromCharCode",
-    252,241,249,246,240,231,"map","join",202,172,191,164,169,190,163,165,
-    87,56,53,61,50,52,35,156,250,233,242,255,232,245,243,108,24,3,63,30,
-    5,2,11,206,167,160,170,171,182,129,168,124,12,14,19,8,25,33,84,79,69,
-    68,71,72,"_",55,64,94,89,83,88,1,22,97,127,120,114,121,46,117,65,76,
-    75,77,90,74,115,54,95,82,110,29,36,166,152,159,149,158,134,78,66,85,
-    119,20,26,18,44,67,70,73,104,113,162,205,192,200,199,193,214,130,234,
-    239,238,230,215,207,204,151,211,248,244,226,227,181,146,132,148,133,
-    91,93,86,201,253,247,178,221,150,153,136,220,184,137,145,161,157,131,
-    179,154,142,135,28,125,106,123,155,128,32,45,37,42,59,111,57,38,40,
-    216,185,174,177,183,141,195,236,251,228,212,210,218,173,188,138,139,
-    143,144,175,187,180,4,7,34,194,223,229,15,49,58,96,10,101,16,41,107,
-    48,9,31,27,21,6,109,140,224,225,118,122,196,197,203,186,189,176,13,17,
-    43,99,23,47,103,112,237,80,105,102,98,213,126,81,100,92,116,51,62,219,
-    209,254,208,39,222,198,217,235,False,60,"Boolean","Number","String",
-    "j","t","u","arguments","s","random",256,"floor","push","length","0",
-    "toString","y","charCodeAt"
-]
-
-r = F
-MAX = len(F)
-
-def opname(A):
-    return {0:'SHR_U',2:'SHL',3:'DEC_PROP',4:'NOP',5:'BIT_NOT',6:'CALL_IF',
-            7:'MAKE_FUNC',8:'INC_PROP',9:'LT',10:'LTE',11:'RETURN',
-            12:'GTE',13:'DUP_TOP',14:'JMP_TBL',15:'EQ_STRICT',16:'BUILD_STR',
-            17:'MOD',18:'ADD',19:'THROW',20:'AND',21:'VAR_DECL',22:'SUB',
-            23:'XOR',24:'GT',25:'RET_VAL',26:'MUL',27:'SET_PROP',28:'JIF_F',
-            29:'EQ_LOOSE',30:'PUSH_SCOPE',31:'JUMP',32:'JIF_T',33:'LOAD_VAR',
-            34:'PUSH_WIN',35:'TYPEOF',36:'NEQ_S',37:'CALL_WH',38:'OR',
-            39:'TRY',40:'DIV',41:'NEW',42:'IN',43:'PUSH_C',44:'PUSH_OBJ',
-            45:'DEL',46:'INST',47:'SET_IDX',48:'SHR',49:'BIND',50:'CALL_M',
-            51:'NEQ_L',52:'NOT',53:'POP_N',54:'PUSH_U',55:'BUILD_ARR',56:'GET_PROP'
-            }.get(A, f'?{A}')
-
-def dis1(pc):
-    if pc >= MAX: return f"{pc}: EOF", pc+1
-    A = r[pc]; n = pc+1
-    op = opname(A)
-    args = []
-    if A == 43:
-        vi = r[n]; n+=1
-        v = repr(V[vi]) if vi < len(V) else f'?'
-        args = [f'V[{vi}]={v}']
-    elif A == 33:
-        vi = r[n]; n+=1; push = r[n]; n+=1
-        v = repr(V[vi]) if vi < len(V) else f'?'
-        args = [f'V[{vi}]={v}', f'push={push}']
-    elif A == 21:
-        vi = r[n]; n+=1
-        v = repr(V[vi]) if vi < len(V) else f'?'
-        args = [f'V[{vi}]={v}']
-    elif A in [27,56,0,2,5,9,10,12,15,17,18,20,22,23,24,26,29,36,38,40,48,51,52]:
-        push = r[n]; n+=1; args=[f'push={push}']
-    elif A in [28,31,32,6,37]:
-        t = r[n]; n+=1; args=[f'->{t}']
-    elif A == 49:
-        cnt = r[n]; n+=1; args=[f'n={cnt}']
-    elif A in [55,16]:
-        cnt = r[n]; n+=1; push = r[n]; n+=1; args=[f'cnt={cnt}',f'push={push}']
-    elif A == 50:
-        na = r[n]; n+=1; push = r[n]; n+=1; args=[f'nargs={na}',f'push={push}']
-    elif A == 7:
-        entry = r[n]; n+=1; push = r[n]; n+=1; args=[f'entry={entry}',f'push={push}']
-    elif A in [8,3]:
-        pre=r[n];n+=1;push=r[n];n+=1;args=[f'pre={pre}',f'push={push}']
-    elif A == 53:
-        cnt=r[n];n+=1;push=r[n];n+=1;args=[f'cnt={cnt}',f'push={push}']
-    elif A == 25:
-        v=r[n];n+=1;args=[f'inline_val={v}']
-    return f"{pc:6d}: {op:12} {' '.join(str(a) for a in args)}", n
-
-# Trace from PC 15989 (y function entry) through 16838 - fully
-pc = 15989
-while pc < 16840:
-    line, next_pc = dis1(pc)
-    print(line)
-    pc = next_pc
-PYEOF
-Output
-
- 15989: PUSH_C       V[0]='o'
- 15991: PUSH_C       V[1]='r'
- 15993: BIND         n=1
- 15995: VAR_DECL     V[2]='a'
- 15997: VAR_DECL     V[3]='m'
- 15999: VAR_DECL     V[4]='C'
- 16001: VAR_DECL     V[5]='e'
- 16003: VAR_DECL     V[6]='f'
- 16005: VAR_DECL     V[14]='n'
- 16007: LOAD_VAR     V[0]='o' push=1
- 16010: PUSH_SCOPE   
- 16011: PUSH_C       V[10]='d'
- 16013: CALL_M       nargs=1 push=1
- 16016: PUSH_SCOPE   
- 16017: PUSH_C       V[279]='u'
- 16019: CALL_M       nargs=1 push=1
- 16022: PUSH_SCOPE   
- 16023: PUSH_C       V[0]='o'
- 16025: SET_PROP     push=0
- 16027: PUSH_SCOPE   
- 16028: PUSH_C       V[0]='o'
- 16030: GET_PROP     push=1
- 16032: PUSH_C       V[286]='length'
- 16034: GET_PROP     push=1
- 16036: PUSH_SCOPE   
- 16037: PUSH_C       V[2]='a'
- 16039: SET_PROP     push=0
- 16041: PUSH_SCOPE   
- 16042: PUSH_C       V[1]='r'
- 16044: GET_PROP     push=1
- 16046: PUSH_C       V[286]='length'
- 16048: GET_PROP     push=1
- 16050: PUSH_SCOPE   
- 16051: PUSH_C       V[3]='m'
- 16053: SET_PROP     push=0
- 16055: BUILD_ARR    cnt=0 push=1
- 16058: PUSH_SCOPE   
- 16059: PUSH_C       V[5]='e'
- 16061: SET_PROP     push=0
- 16063: CALL_IF      ->16123
- 16065: VAR_DECL     V[0]='o'
- 16067: PUSH_C       V[12]=0
- 16069: PUSH_SCOPE   
- 16070: PUSH_C       V[0]='o'
- 16072: SET_PROP     push=0
- 16074: CALL_WH      ->16114
- 16076: LOAD_VAR     V[0]='o' push=1
- 16079: PUSH_C       V[221]=16
- 16081: LT           push=1
- 16083: JIF_F        ->16112
- 16085: LOAD_VAR     V[0]='o' push=1
- 16088: PUSH_C       V[209]=4
- 16090: SHL          push=1
- 16092: LOAD_VAR     V[0]='o' push=1
- 16095: PUSH_C       V[221]=16
- 16097: MOD          push=1
- 16099: ADD          push=1
- 16101: PUSH_SCOPE   
- 16102: PUSH_C       V[5]='e'
- 16104: GET_PROP     push=1
- 16106: PUSH_C       V[285]='push'
- 16108: CALL_M       nargs=1 push=0
- 16111: RETURN       
- 16112: RET_VAL      inline_val=1
- 16114: PUSH_SCOPE   
- 16115: PUSH_C       V[0]='o'
- 16117: INC_PROP     pre=0 push=0
- 16120: JUMP         ->16074
- 16122: RETURN       
- 16123: PUSH_SCOPE   
- 16124: PUSH_C       V[5]='e'
- 16126: GET_PROP     push=1
- 16128: PUSH_C       V[286]='length'
- 16130: GET_PROP     push=1
- 16132: PUSH_SCOPE   
- 16133: PUSH_C       V[6]='f'
- 16135: SET_PROP     push=0
- 16137: CALL_IF      ->16311
- 16139: VAR_DECL     V[0]='o'
- 16141: PUSH_C       V[12]=0
- 16143: PUSH_SCOPE   
- 16144: PUSH_C       V[0]='o'
- 16146: SET_PROP     push=0
- 16148: VAR_DECL     V[2]='a'
- 16150: PUSH_C       V[12]=0
- 16152: PUSH_SCOPE   
- 16153: PUSH_C       V[2]='a'
- 16155: SET_PROP     push=0
- 16157: CALL_WH      ->16302
- 16159: LOAD_VAR     V[0]='o' push=1
- 16162: LOAD_VAR     V[6]='f' push=1
- 16165: LT           push=1
- 16167: JIF_F        ->16300
- 16169: LOAD_VAR     V[0]='o' push=1
- 16172: LOAD_VAR     V[2]='a' push=1
- 16175: ADD          push=1
- 16177: PUSH_SCOPE   
- 16178: PUSH_C       V[5]='e'
- 16180: GET_PROP     push=1
- 16182: PUSH_SCOPE   
- 16183: PUSH_C       V[0]='o'
- 16185: GET_PROP     push=1
- 16187: GET_PROP     push=1
- 16189: ADD          push=1
- 16191: PUSH_SCOPE   
- 16192: PUSH_C       V[5]='e'
- 16194: GET_PROP     push=1
- 16196: PUSH_SCOPE   
- 16197: PUSH_C       V[2]='a'
- 16199: GET_PROP     push=1
- 16201: GET_PROP     push=1
- 16203: ADD          push=1
- 16205: PUSH_C       V[83]=1
- 16207: SHR          push=1
- 16209: LOAD_VAR     V[0]='o' push=1
- 16212: LOAD_VAR     V[3]='m' push=1
- 16215: MOD          push=1
- 16217: PUSH_SCOPE   
- 16218: PUSH_C       V[1]='r'
- 16220: GET_PROP     push=1
- 16222: PUSH_C       V[290]='charCodeAt'
- 16224: CALL_M       nargs=1 push=1
- 16227: ADD          push=1
- 16229: LOAD_VAR     V[6]='f' push=1
- 16232: PUSH_C       V[83]=1
- 16234: SUB          push=1
- 16236: AND          push=1
- 16238: PUSH_SCOPE   
- 16239: PUSH_C       V[2]='a'
- 16241: SET_PROP     push=0
- 16243: PUSH_SCOPE   
- 16244: PUSH_C       V[5]='e'
- 16246: GET_PROP     push=1
- 16248: PUSH_SCOPE   
- 16249: PUSH_C       V[0]='o'
- 16251: GET_PROP     push=1
- 16253: GET_PROP     push=1
- 16255: PUSH_SCOPE   
- 16256: PUSH_C       V[4]='C'
- 16258: SET_PROP     push=0
- 16260: PUSH_SCOPE   
- 16261: PUSH_C       V[5]='e'
- 16263: GET_PROP     push=1
- 16265: PUSH_SCOPE   
- 16266: PUSH_C       V[2]='a'
- 16268: GET_PROP     push=1
- 16270: GET_PROP     push=1
- 16272: PUSH_SCOPE   
- 16273: PUSH_C       V[5]='e'
- 16275: GET_PROP     push=1
- 16277: PUSH_SCOPE   
- 16278: PUSH_C       V[0]='o'
- 16280: GET_PROP     push=1
- 16282: SET_PROP     push=0
- 16284: LOAD_VAR     V[4]='C' push=1
- 16287: PUSH_SCOPE   
- 16288: PUSH_C       V[5]='e'
- 16290: GET_PROP     push=1
- 16292: PUSH_SCOPE   
- 16293: PUSH_C       V[2]='a'
- 16295: GET_PROP     push=1
- 16297: SET_PROP     push=0
- 16299: RETURN       
- 16300: RET_VAL      inline_val=1
- 16302: PUSH_SCOPE   
- 16303: PUSH_C       V[0]='o'
- 16305: INC_PROP     pre=0 push=0
- 16308: JUMP         ->16157
- 16310: RETURN       
- 16311: CALL_IF      ->16590
- 16313: VAR_DECL     V[1]='r'
- 16315: PUSH_C       V[12]=0
- 16317: PUSH_SCOPE   
- 16318: PUSH_C       V[1]='r'
- 16320: SET_PROP     push=0
- 16322: VAR_DECL     V[3]='m'
- 16324: PUSH_C       V[12]=0
- 16326: PUSH_SCOPE   
- 16327: PUSH_C       V[3]='m'
- 16329: SET_PROP     push=0
- 16331: VAR_DECL     V[14]='n'
- 16333: PUSH_C       V[12]=0
- 16335: PUSH_SCOPE   
- 16336: PUSH_C       V[14]='n'
- 16338: SET_PROP     push=0
- 16340: CALL_WH      ->16581
- 16342: LOAD_VAR     V[1]='r' push=1
- 16345: LOAD_VAR     V[2]='a' push=1
- 16348: LT           push=1
- 16350: JIF_F        ->16579
- 16352: LOAD_VAR     V[3]='m' push=1
- 16355: LOAD_VAR     V[14]='n' push=1
- 16358: XOR          push=1
- 16360: PUSH_SCOPE   
- 16361: PUSH_C       V[5]='e'
- 16363: GET_PROP     push=1
- 16365: PUSH_SCOPE   
- 16366: PUSH_C       V[3]='m'
- 16368: GET_PROP     push=1
- 16370: GET_PROP     push=1
- 16372: PUSH_SCOPE   
- 16373: PUSH_C       V[5]='e'
- 16375: GET_PROP     push=1
- 16377: PUSH_SCOPE   
- 16378: PUSH_C       V[14]='n'
- 16380: GET_PROP     push=1
- 16382: GET_PROP     push=1
- 16384: XOR          push=1
- 16386: ADD          push=1
- 16388: LOAD_VAR     V[6]='f' push=1
- 16391: PUSH_C       V[83]=1
- 16393: SUB          push=1
- 16395: AND          push=1
- 16397: PUSH_SCOPE   
- 16398: PUSH_C       V[14]='n'
- 16400: SET_PROP     push=0
- 16402: PUSH_SCOPE   
- 16403: PUSH_C       V[5]='e'
- 16405: GET_PROP     push=1
- 16407: PUSH_SCOPE   
- 16408: PUSH_C       V[3]='m'
- 16410: GET_PROP     push=1
- 16412: GET_PROP     push=1
- 16414: PUSH_SCOPE   
- 16415: PUSH_C       V[4]='C'
- 16417: SET_PROP     push=0
- 16419: PUSH_SCOPE   
- 16420: PUSH_C       V[5]='e'
- 16422: GET_PROP     push=1
- 16424: PUSH_SCOPE   
- 16425: PUSH_C       V[14]='n'
- 16427: GET_PROP     push=1
- 16429: GET_PROP     push=1
- 16431: PUSH_SCOPE   
- 16432: PUSH_C       V[5]='e'
- 16434: GET_PROP     push=1
- 16436: PUSH_SCOPE   
- 16437: PUSH_C       V[3]='m'
- 16439: GET_PROP     push=1
- 16441: SET_PROP     push=0
- 16443: LOAD_VAR     V[4]='C' push=1
- 16446: PUSH_SCOPE   
- 16447: PUSH_C       V[5]='e'
- 16449: GET_PROP     push=1
- 16451: PUSH_SCOPE   
- 16452: PUSH_C       V[14]='n'
- 16454: GET_PROP     push=1
- 16456: SET_PROP     push=0
- 16458: LOAD_VAR     V[1]='r' push=1
- 16461: PUSH_SCOPE   
- 16462: PUSH_C       V[0]='o'
- 16464: GET_PROP     push=1
- 16466: PUSH_C       V[290]='charCodeAt'
- 16468: CALL_M       nargs=1 push=1
- 16471: PUSH_SCOPE   
- 16472: PUSH_C       V[4]='C'
- 16474: SET_PROP     push=0
- 16476: LOAD_VAR     V[4]='C' push=1
- 16479: LOAD_VAR     V[3]='m' push=1
- 16482: LOAD_VAR     V[14]='n' push=1
- 16485: ADD          push=1
- 16487: ADD          push=1
- 16489: PUSH_SCOPE   
- 16490: PUSH_C       V[4]='C'
- 16492: SET_PROP     push=0
- 16494: LOAD_VAR     V[4]='C' push=1
- 16497: PUSH_SCOPE   
- 16498: PUSH_C       V[5]='e'
- 16500: GET_PROP     push=1
- 16502: PUSH_SCOPE   
- 16503: PUSH_C       V[3]='m'
- 16505: GET_PROP     push=1
- 16507: GET_PROP     push=1
- 16509: PUSH_SCOPE   
- 16510: PUSH_C       V[5]='e'
- 16512: GET_PROP     push=1
- 16514: PUSH_SCOPE   
- 16515: PUSH_C       V[14]='n'
- 16517: GET_PROP     push=1
- 16519: GET_PROP     push=1
- 16521: XOR          push=1
- 16523: XOR          push=1
- 16525: PUSH_SCOPE   
- 16526: PUSH_C       V[4]='C'
- 16528: SET_PROP     push=0
- 16530: LOAD_VAR     V[4]='C' push=1
- 16533: PUSH_C       V[43]=255
- 16535: AND          push=1
- 16537: PUSH_SCOPE   
- 16538: PUSH_C       V[4]='C'
- 16540: SET_PROP     push=0
- 16542: LOAD_VAR     V[4]='C' push=1
- 16545: PUSH_SCOPE   
- 16546: PUSH_C       V[5]='e'
- 16548: GET_PROP     push=1
- 16550: PUSH_SCOPE   
- 16551: PUSH_C       V[3]='m'
- 16553: GET_PROP     push=1
- 16555: SET_PROP     push=0
- 16557: LOAD_VAR     V[3]='m' push=1
- 16560: PUSH_C       V[83]=1
- 16562: ADD          push=1
- 16564: LOAD_VAR     V[6]='f' push=1
- 16567: PUSH_C       V[83]=1
- 16569: SUB          push=1
- 16571: AND          push=1
- 16573: PUSH_SCOPE   
- 16574: PUSH_C       V[3]='m'
- 16576: SET_PROP     push=0
- 16578: RETURN       
- 16579: RET_VAL      inline_val=1
- 16581: PUSH_SCOPE   
- 16582: PUSH_C       V[1]='r'
- 16584: INC_PROP     pre=0 push=0
- 16587: JUMP         ->16340
- 16589: RETURN       
- 16590: CALL_IF      ->16744
- 16592: VAR_DECL     V[0]='o'
- 16594: PUSH_C       V[12]=0
- 16596: PUSH_SCOPE   
- 16597: PUSH_C       V[0]='o'
- 16599: SET_PROP     push=0
- 16601: VAR_DECL     V[1]='r'
- 16603: PUSH_C       V[12]=0
- 16605: PUSH_SCOPE   
- 16606: PUSH_C       V[1]='r'
- 16608: SET_PROP     push=0
- 16610: CALL_WH      ->16735
- 16612: LOAD_VAR     V[0]='o' push=1
- 16615: LOAD_VAR     V[6]='f' push=1
- 16618: PUSH_C       V[83]=1
- 16620: SHL          push=1
- 16622: LT           push=1
- 16624: JIF_F        ->16733
- 16626: LOAD_VAR     V[0]='o' push=1
- 16629: LOAD_VAR     V[6]='f' push=1
- 16632: MOD          push=1
- 16634: PUSH_SCOPE   
- 16635: PUSH_C       V[1]='r'
- 16637: SET_PROP     push=0
- 16639: LOAD_VAR     V[1]='r' push=1
- 16642: JIF_F        ->16689
- 16644: CALL_IF      ->16687
- 16646: PUSH_SCOPE   
- 16647: PUSH_C       V[5]='e'
- 16649: GET_PROP     push=1
- 16651: PUSH_SCOPE   
- 16652: PUSH_C       V[1]='r'
- 16654: GET_PROP     push=1
- 16656: GET_PROP     push=1
- 16658: PUSH_SCOPE   
- 16659: PUSH_C       V[5]='e'
- 16661: GET_PROP     push=1
- 16663: LOAD_VAR     V[1]='r' push=1
- 16666: PUSH_C       V[83]=1
- 16668: SUB          push=1
- 16670: GET_PROP     push=1
- 16672: XOR          push=1
- 16674: PUSH_SCOPE   
- 16675: PUSH_C       V[5]='e'
- 16677: GET_PROP     push=1
- 16679: PUSH_SCOPE   
- 16680: PUSH_C       V[1]='r'
- 16682: GET_PROP     push=1
- 16684: SET_PROP     push=0
- 16686: RETURN       
- 16687: JUMP         ->16732
- 16689: CALL_IF      ->16732
- 16691: PUSH_SCOPE   
- 16692: PUSH_C       V[5]='e'
- 16694: GET_PROP     push=1
- 16696: PUSH_SCOPE   
- 16697: PUSH_C       V[1]='r'
- 16699: GET_PROP     push=1
- 16701: GET_PROP     push=1
- 16703: PUSH_SCOPE   
- 16704: PUSH_C       V[5]='e'
- 16706: GET_PROP     push=1
- 16708: LOAD_VAR     V[6]='f' push=1
- 16711: PUSH_C       V[83]=1
- 16713: SUB          push=1
- 16715: GET_PROP     push=1
- 16717: XOR          push=1
- 16719: PUSH_SCOPE   
- 16720: PUSH_C       V[5]='e'
- 16722: GET_PROP     push=1
- 16724: PUSH_SCOPE   
- 16725: PUSH_C       V[1]='r'
- 16727: GET_PROP     push=1
- 16729: SET_PROP     push=0
- 16731: RETURN       
- 16732: RETURN       
- 16733: RET_VAL      inline_val=1
- 16735: PUSH_SCOPE   
- 16736: PUSH_C       V[0]='o'
- 16738: INC_PROP     pre=0 push=0
- 16741: JUMP         ->16610
- 16743: RETURN       
- 16744: PUSH_C       V[11]=''
- 16746: PUSH_C       V[12]=0
- 16748: MAKE_FUNC    entry=16753 push=1
- 16751: JUMP         ->16789
- 16753: PUSH_C       V[0]='o'
- 16755: BIND         n=0
- 16757: LOAD_VAR     V[0]='o' push=1
- 16760: PUSH_C       V[221]=16
- 16762: LT           push=1
- 16764: JIF_F        ->16770
- 16766: PUSH_C       V[287]='0'
- 16768: JUMP         ->16772
- 16770: PUSH_C       V[11]=''
- 16772: PUSH_C       V[221]=16
- 16774: PUSH_SCOPE   
- 16775: PUSH_C       V[0]='o'
- 16777: GET_PROP     push=1
- 16779: PUSH_C       V[288]='toString'
- 16781: CALL_M       nargs=1 push=1
- 16784: ADD          push=1
- 16786: RET_VAL      inline_val=2
- 16788: RETURN       
- 16789: PUSH_SCOPE   
- 16790: PUSH_C       V[5]='e'
- 16792: GET_PROP     push=1
- 16794: PUSH_C       V[22]='map'
- 16796: CALL_M       nargs=1 push=1
- 16799: PUSH_C       V[23]='join'
- 16801: CALL_M       nargs=1 push=1
- 16804: PUSH_SCOPE   
- 16805: PUSH_C       V[14]='n'
- 16807: SET_PROP     push=0
- 16809: LOAD_VAR     V[14]='n' push=1
- 16812: RET_VAL      inline_val=2
- 16814: RETURN       
- 16815: LOAD_VAR     V[0]='o' push=1
- 16818: LOAD_VAR     V[1]='r' push=1
- 16821: PUSH_SCOPE   
- 16822: PUSH_C       V[289]='y'
- 16824: CALL_M       nargs=2 push=1
- 16827: PUSH_SCOPE   
- 16828: PUSH_C       V[2]='a'
- 16830: SET_PROP     push=0
- 16832: RETURN       
- 16833: LOAD_VAR     V[2]='a' push=1
- 16836: RET_VAL      inline_val=2
-16838: EOF
-16839: EOF
-```
-
-15. By analysing the disassembly we can reconstruct it into javascript using:
+13. Tracing the actual VM hash algorithm - let's look at what 'y' function does at PC 15982 using: `y_function_trace.py`
+14. Now we need full disassembly of the y() function from PC 15989 to 16838 we can get that using: `disasm_y_func.py`
+15. By analysing the disassembly we can reconstruct it into javascript by converting it into psuedocode then in javascript eg:
 ```js
 // ============================================================
 // Aliyun Captcha VM Hash — Full Reverse Engineering Notes
@@ -2872,57 +2147,36 @@ Final:  9333ef7396dd56dbb9d6e8f31e8f6014
 Match:  true
 ```
 
-### Hash function reverse engineering completed more details at [VMachine_HASH](./VMachine_Hash_report.md)
+### Hash function reverse engineering completed more details at [VMachine_HASH](../VMachine_Hash_report.md)
 
-## TrackJson Arg Value generation
+## 12. TrackJson `arg` Value Generation
 
-TrackJson arg is assembled in this code
+The `arg` property inside `TrackJson` is assigned via heavily obfuscated code:
 ```js
+// Original snippet:
+n_[nx.c(s, 99 * !-s, 88 * !-s)] = I,
 
- a >= 4 ? a > 6 ? (e -= -23,
-m[y] = b + ({ 0: s  })[0](127, 82)) : a <= 4 ? (e ^= 24,
-P[(s && s)(242, 19)](void 0, v)) : a < 6 ? (P[(s && s)(242, 19)](void 0, v),
-e += -45) : 0 > Math.abs(!v) ? e ^= 2 : e ^= 44 : a >= 3 ? (O[nx.F(c, nx.c(s, [170, s()][0], [91, s()][0]))] = eh,
+// nx.c = function(t, n, e) { return t(n, e) }
+// s = function(t, n) { return (td || td)(w.U(t, 2), n)}
+// w.U = function(t, n) {return t - n}
+// s = function(t, n) {return td(t - 2, n);}
 
-// This code
-e -= -28) : a >= 1 ? a <= 1 ? (n_[nx.c(s, 99 * !-s, 88 * !-s)] = I,
+// -s evaluates to NaN (unary minus on function)
+// !NaN is true
+// 99 * true = 99
+// 88 * true = 88
+
+// Resolves to:
+n_[s(99,88)] = I;
+// s(99,88) resolves to 'arg'
+// Thus: n_['arg'] = I
 ```
 
 ```js
 Subject:
 n_[nx.c(s, 99 * !-s, 88 * !-s)] = I,
 ```
-
-### Deobfuscation Time
-```js
- nx.c = function(t, n, e) {
-                            return t(n, e)
-                        }
-
-// resolution
-
-n_[s(99 * !-s, 88 * !-s)] = I,
-
-s = function(t, n) { return (td || td)(w.U(t, 2), n)}
-w.U = function(t, n) {return t - n}
-s = function(t, n) {return td(t - 2, n);}
-
--s = NaN
-!NaN = true
-!-s = !Nan = true
-99 * true = 99
-88 * true = 88
-
-// Resolution
-n_[s(99,88)] =I,
-
-s(99,88) = 'arg'
-
-// Resoltuion
-
-n_['arg'] = I,
-n_.arg = I,
-```
+**OPTIONAL EXPLANATION: WHY -s returns NaN**
 ```optional
 // Explanation: Why -s returns NaN
 // The unary minus operator (-) tries to convert its operand to a number
@@ -2957,69 +2211,52 @@ false === Nan result is  false
 ```
 
 ### How the variable I is defined?
-Variable I in the context of `n_['arg'] = I` is most likely generated by the virtual machine more specifically
-this call
+Variable `I` is generated by the virtual machine `P`:
 
 ```js
 P[(s && s)(242, 19)](void 0, v)) : a < 6 ? (P[(s && s)(242, 19)](void 0, v)
 
-// Resoltuion
-P[s(242,19)](void 0,v) :  a < 6 ? P[s(242,19)](void 0,v)
-
-s(242,19) = 'apply'
-
-//  resoltuion
-P['apply'](void 0,v)
-// resoltuion
+P[(s && s)(242, 19)](void 0, v)
+// s(242, 19) resolves to 'apply'
+// Resolves to:
+P.apply(void 0, v)
+// resolves to
 P['apply'](unndefined,v)
+```
 
-typeof v is object
+`v` is an arguments object containing keys `["0", "1", "2", "3", "4", "5"]`:
 
-Object.keys(v)
-
-["0","1","2","3","4","5"]
-
-
-// These keys are arguments passed to interpereter P using P.apply(undefined,arguments)
-
-0 is the 1st argument and it resolves to `0`
-1 is the 2nd arg resolving to `[]`
-2 is the 3rd argument resolving to bytecode shown in L_bytecode.txt
-3 is the 4th arg resolving to constant pool R shown below
-4 is the 5th arg resolving to JSON {r:1}
-5 is the 6th arg resolving to variable m from the code m[y] = .... and it contains: ['dynamic-string','constant_string]
-eg ["IWZInZXnCl","4xrihv8zb8tf1mfj"]
+- `0`: `0`
+- `1`: `[]`
+- `2`: Bytecode array (shown in `L_bytecode.txt`)
+- `3`: Constant pool `R` (see below)
+- `4`: JSON `{r:1}`
+- `5`: Array `m` containing `['dynamic-string', 'constant_string']`
+  - `m[0]` = CertifyID from init captcha response
+  - `m[1]` = Constant string (e.g., `'4xrihv8zb8tf1mfj'`)
 m[y] = m[1] = constant_string in this case 4xrihv8zb8tf1mfj
 m[0] = dynamic_string AKA CertifyID from init captcha response 
-P.apply(undefined,arguments) resolves to P(all the args from var v)
+```js
+P.apply(undefined,v) resolves to just P(args from var v)
+```
 
-// Important Note regarding the constant_string
+### Constant String Variations
+There are 10 possible values for m[1]. Example cases:
+```js
+// Case 0:
+m[y] = B + (~s ? s : 0)(277, 56)
+// B = fxt8jzp3, s(277,56) = p0ienz71
+// Resolves: m[y] = 'fxt8jzp3p0ienz71'
 
-It is important to note that there are 10 possible values of the constant strings but only one is used at a time
-in my case that was 4xrihv8zb8tf1mfj
+// Case 1:
+m[y] = M + nx.c(s, nx.j(-s, 59), nx.j(-s, 26))
+// M = 4xrihv8z, s(59,26) = b8tf1mfj
+// Resolves: m[y] = '4xrihv8zb8tf1mfj'
+// This is  my case
 
-Heres list of all the constant string def
-
-1. In case 0:
- m[y] = B + (~s ? s : 0)(277, 56)
-B = nx.c(s, ~s ? 123 : 1, ~s ? 98
-B = fxt8jzp3
-s(277,56) = p0ienz71
-// resolution  m[y] = fxt8jzp3p0ienz71
-
-2. In case 1 (my case):
- m[y] = M + nx.c(s, nx.j(-s, 59), nx.j(-s, 26)),
-nx.j = function(t, n) {return t || n}
-M = s(286, 78)
-M = 4xrihv8z
-s(59,26) = b8tf1mfj
-// resolution m[y] = 4xrihv8zb8tf1mfj
-
-3. In case 3:
+// Case 3:
 m[y] = k + (~s ? s : 8)(22, 44)
-
-s(22,44) = '8g52k8hy'
-
+// s(22,44) = '8g52k8hy'
 ```
 
 **R constant Pool**
