@@ -2,7 +2,7 @@
 `Bytecode: F`
 `Interpreter: P`
 `String Pool: V`
-`OPC:0`
+`PC:0`
 `ez: {r:1}`
 
 ## The VM dispatch machine, explained
