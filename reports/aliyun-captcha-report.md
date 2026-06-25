@@ -1,8 +1,9 @@
 # Aliyun CaptchaJS Information Report 
 
-# Obfuscation & Deobfuscation of literals [File:AliyunCaptcha.js] 
+## Obfuscation & Deobfuscation of literals [File:AliyunCaptcha.js] 
 
-Starting with 
+**Starting with**
+
 ```javascript
 var G = rr; // <- Deobfuscator function
 window.__G = G = rr; // Added proxy to access it globally 
@@ -140,7 +141,7 @@ Jt[G(547) + "e"] = {
 ```        
 
 
-#### Deobfuscation examples
+### Deobfuscation examples
 ```js
 var G = rr;
 window.__G = G;
@@ -765,7 +766,7 @@ console.log(Ee)
 
 ---
 
-### Function Re internals [AliyunCaptcha.js]
+## Function Re internals [AliyunCaptcha.js]
 
 ```javascript
 var nr = new Jt({});
@@ -836,7 +837,7 @@ _extend: function(t) {
             }
 ```
 	    
-#### Decryption Script
+### Decryption Script
 
 ```python3
 from Crypto.Cipher import AES
@@ -1023,7 +1024,7 @@ var Rt = {
 ```
 
 
-### Calculation  of literals using Deobfuscation function rr:
+## Calculation  of literals using Deobfuscation function rr:
 
 #### Step 1:  The jt() array contains the raw string fragments
 ```javascript
@@ -1468,7 +1469,7 @@ function Pe() {
         }
 ```
 
-#### Function Re Definition
+### Function Re Definition
 ```javascript
         function Re(t, r, e) {
             r._extend(Be({}, t));
@@ -1480,10 +1481,10 @@ function Pe() {
             be([n, e.DEVICE_TYPE.WEB, c, r.APP_VERSION, "CLOUD", ""])
         }
 ```
-Notes 
+
+**Notes:** 
 - 1. `var n` in context of `var n = t.appKey || r.APP_KEY can have multiple values since it likely gets it values from Rt.appKey which have different values based on region and version. This is same for `var i` im not sure but it seems obviuous 
 - 2. in context of `var o` the key used is e.WEB_AES_FLAG_SECRET_KEY since r.secretKey is undefined and we should stick to it since it works 
-
 
 
 ### Function Re reconstruction in python
@@ -1875,12 +1876,13 @@ function je() {
         }
 ```
 
-Notes:
+**Notes:**
 - 1. `o.KEY_SECRET` points to `var Ee.KEY_SECRET` which is  "YSKfst7GaVkXwZYvVihJsKF9r89koz"
 
 ### Reverse Engineered Signature Generation Example in Python
 `Signature.py`
 ```python
+# This script includes core signature gen logic and is currently configured for InitCaptchaV3
 import hmac
 import hashlib
 import base64
@@ -1972,7 +1974,7 @@ def make_captcha_request(access_key_id, secret_key, scene_id, device_token):
 access_key = "LTAI5tSEBwYMwVKAQGpxmvTd"  # Your AccessKeyId
 secret = "YSKfst7GaVkXwZYvVihJsKF9r89koz"  # You need the actual secret key
 scene = "didk33e0"
-device_token = "U0dfV0VCIzM3OTVkMjgyNDJhMTE2MTliYzI1Zjc4NmY4NGU1M2Q0LWgtMTc3ODc1OTg5ODA4Ny00MWYzYjlmNzAyZmI0MDBiOTkyMDQ1ODYwMWNkOTE5MyNrbDVhUnF6bjdGc0hKYnhLYXh0ZC82WWFwMHFUY1U1SUllRmZpUERMWCt3cVc5NWsrV1JQTHYxNGlRUUtWNUQ3Ui9nTXJDVy9zRzhsWlBEWW1vWFpGYTN4Y2RSMW0vc1pxNS95NmFnTzFKWHM0MkJ2VjdkVnBuZFdHTEtTQjFxL1RGRWNROFl3Qy9OM0dqTTJTY1F0L1lHbkl6ODVQTmRTdnVPRmpJMXZTRVRLWi9POHZsSjRYUzBBcy9UREJGcWlJc0l2eUI2blpYU0RDcmZ1YlUxb3lGNUQvRy9USUFFQThIWWQyUTMrR3YyT0g3U0pnN1RYbWQwSDRqSnNHTVZQdU50RU5oWDdHQXFIVGk3VEJwLzV1S0gvMlpvN2V3eVVjL0c1L0s5am4vUUh5cnlZZHRhdERzVlRQYU1JTG51Q3VrVVlrM1JpRE5VeWtkOHE4eWF5N2d1UkJvQXpQaUZ4aVdEbUtuVERwZUIzbnlXZ0ZBL21ZYWJmZ1dHU09ic2NQRENKY2xGTGRQK0dUZ3p1UWdXZG55QlpVNEVnaTVuMkQzUlNvYTlab244ckZXNFA5Sm1HZ0crQ1IwZVpWeVlYSDFIV2liYTRVVDVxZjh3SkdKclRZODZUbjJoWXNsL3dGT3ZXeTJPek8xZlVTNHd1d3V3REVra0gySTdpY2pldm1lM3doajdNNlV5OXpNUkFJa0JCTjRhUjdqWndyTnlXcFowK0JINjFWN0J4bVlXQVdqemtCcWpVSDREbEZZd3p6aVlUT1FUVlZFTDJ4dmEzV2NkK0dlOTlNVHNVOG9sRVgvWDQ0QzJBS3hpYTBDSzV0ZkZlQzB2Mkh1NUpLSW01Yk9Vd20wVjdLVGovczNHSWVNb25Vb2sxV20yMmVPd0J3aFJDbVhxWVlUZ3VqQjlPN0tPSmlzc1NyMHBOaXBHbXVVTGViYldCSXlrcnlOOUN1VTBsOWsraWsvZ1V5U1ZyRzNveStsaWk1ZVRybVZMdzFDOThGTjh6K09LOEFaU2ZrZDBudVk1UWZIdDFYSk5OYWxrRm1LOWk4ZUFIeXJzaDUydUJFek4rQUVBc1ZFQjUrdEJ6bllmOHQvVllUK05sUW9rcDkzY29jSWhVY0tjYUtMRHJ5Zz09IzY2NSNjMzEzMmRkYmZlMjVjNzZiMzkyNDYwNjgxN2ExZGYxMQ=="
+device_token = Insert-Dev-Token-Here"
 
 response = make_captcha_request(access_key, secret, scene, device_token)
 print(response.json())
@@ -2003,7 +2005,7 @@ function generateAliyunSignature(params, secretKey) {
     const hmac = crypto.createHmac('sha1', signatureKey);
     hmac.update(stringToSign);
 
-    return hmac.digest('base64');                                                                                                                                         }                                                                                                                                                                                                                                                                                                                                                   // Example usage:
+    return hmac.digest('base64');                                                                                                                                         }                                                                                                                                                                                                                              // Example usage:
 
 const params = {                                                                                                                                                              AccessKeyId: "LTAI5tSEBwYMwVKAQGpxmvTd",                                                                                                                                  Action: "InitCaptchaV3",                                                                                                                                                  Format: "JSON",
     SignatureMethod: "HMAC-SHA1",
@@ -2034,7 +2036,7 @@ console.log("Generated params with signature:", params);
 ### 1. AliyunCaptccha.js Loads
 
 ### 2. Loads fielin.*.js
-feiling.js generates DeviceToken and exposes a call
+feiling.js likely generates DeviceToken and exposes a call
 `window.um?.getToken`
 `window.z_um?.getToken`
 DeviceToken is calulated by fielin js and used in client server requests
@@ -2052,8 +2054,9 @@ fetch("https://no8xfe.captcha-open-southeast.aliyuncs.com/", {
   "credentials": "omit"
 });
 ```
-DeviceData is sent on first request it is determined by if the previous response inlucded CaptchaTypre Traceless or not since before there was no request it is fired 
-On second requst DeviceToken is sent if previous inclueded TRACELESS captcha type
+**Note:**
+DeviceData is sent on first request, it is determined by if the previous response inlucded CaptchaTypre Traceless or not since before  0 there is nothin same as this there was no request so it is fired with dev_data and response contains device config
+On next requst DeviceToken is sent if previous response inclueded TRACELESS captcha type
 ```json
 {
     "CertifyId": "gl62Aqi6e1",
@@ -2070,24 +2073,7 @@ On second requst DeviceToken is sent if previous inclueded TRACELESS captcha typ
 
 ```javascript
 Object.keys(AliyunCaptcha.prototype)
-[
-    "config",
-    "deviceConfig",
-    "startPOWCalculation",
-    "init",
-    "bindEvents",
-    "show",
-    "hide",
-    "loading",
-    "onBizSuccess",
-    "onBizFail",
-    "initPopup",
-    "initEmbed",
-    "initFloat",
-    "destroyCaptcha",
-    "refresh",
-    "onCloseClick",
-    "startTracelessVerification"
+["config","deviceConfig","startPOWCalculation","init","bindEvents","show","hide","loading","onBizSuccess","onBizFail","initPopup","initEmbed","initFloat","destroyCaptcha","refresh","onCloseClick","startTracelessVerification"
 ]
 ```
 
@@ -2099,8 +2085,9 @@ https://g.alicdn.com/captcha-frontend/dynamicJS/3.25.0/pe.050.9453665072ad79a7.j
 
 The javascript calculates captcha payload  (data) field sent in verifycaptchav3
 
-Btw all javasripts calculates data in same way just function names are variables are renamed
-using mitmproxy i tested to use a single js every time and it works
+Btw all javasripts calculates data in same way just function names and variables are renamed
+
+Using mitmproxy i tested to use a single js every time by modifying responses and it works
 
 
 ### 4. VerifyCaptchaV3
@@ -2144,7 +2131,7 @@ eyJjZXJ0aWZ5SWQiOiJnbDYyQXFpNmUxIiwic2NlbmVJZCI6ImRpZGszM2UwIiwiaXNTaWduIjp0cnVl
 ```
 
 
-## Verify Captcha payload generation [pe.*.*.js]
+## Verify Captcha payload generation [pe.<hash>.js]
 
 ### The request
 
@@ -2173,16 +2160,16 @@ fetch("https://no8xfe.captcha-open-southeast.aliyuncs.com/", {
 ```json
 "data":"JRMlgg03DgRAeAILRQpEEHPjZZg9Ez1fbA0qd1yjNhsriXK5OHh3ZgkJc2NaO+pbP7wtcQGL6Gvi5LEZqOMpPHYyKHIfAmJWGUMiBRsQD0kkUUkiCA1Jd8BAFFEFUmL+QMu4MyFaXRQ8WWI+Z3Ib+ByNmoNjgz5I0ECwZobWT5V6ii5ADARXc1BcB3ZnpVMtJn97EAZbYV5+Ly9SEyhzMjNYnyF8fCUVJIx0UDQ2LMIfjHwgCMu0MPWbvABhaIf6ZjkXeldLQW4="
 ```
-The data is base64 encoded likely encrypted zlib compressed and custom hash prepended data 
+The data is base64 encoded custom cipher encrypted zlib compressed and custom hash prepended data 
 
 The actual data looks like : hash+json `'9333ef7396dd56dbb9d6e8f31e8f6014{"TrackList":{"mc":"","tc":"","mu":"","te":"","mp":"","tmv":"","ks":"","fi":"","startTime":1782100652835},"TrackStartTime":1782100652835,"VerifyTime":1782100652862,"arg":"JjObDGdh/ywcWQ=="}'`
-mc = mouse clicks
+mc = mouse clicks?
 tc = touch?
 mu = mouse up?
 etc.
 arg is base64 encoded 10 byte value
 
-#### Entire VerifyCaptcha is done by pe.*.*.js file returned in init captcha response
+#### Entire VerifyCaptcha is done by pe.<hash>.js file returned in init captcha response
 
 ### Variables and their definitions
 ```javascript
@@ -2533,10 +2520,8 @@ var tU = function(t) {   if ("function" == typeof TextEncoder && TextEncoder.pro
 ### Transformation of trackJson is done by fucntion nf as seen in this call C=nx.A(nf,n_)
 ```
 nx.A = function(t,n) { return t(n)}
-C = nf(n_) // n_ is trackJson without hash
+C = nf(n_) // n_ is trackJson without hash <- ig
 ```
-
-
 
 ```javascript
 
