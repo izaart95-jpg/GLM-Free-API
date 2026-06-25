@@ -6,7 +6,7 @@
 3. [Function `Re` Internals: DeviceData Creation](#3-function-re-internals-devicedata-creation-aliyuncaptchajs)
 4. [Information of `Rt` in Context of `Rt.appkey`](#4-information-of-rt-in-context-of-rtappkey-aliyuncaptchajs)
 5. [Function `rr` Index Deobfuscated Literals](#5-function-rr-index-deobfuscated-literals-json-log-aliyuncaptchajs)
-6. [DeviceData Generation & Encryption](#6-devicedata-generation-aliyuncaptchajs)
+6. [DeviceData Generation & Encryption](#6-devicedata-generation--encryption-aliyuncaptchajs)
 7. [Signature and Nonce Generation](#7-signature-and-nonce-generation-aliyuncaptchajs)
 8. [Traceless Captcha Flow](#8-traceless-captchaflow)
 9. [Verify Captcha Payload Generation](#9-verify-captcha-payload-generation-pehashjs)
