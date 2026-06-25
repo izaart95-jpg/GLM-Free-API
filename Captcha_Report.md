@@ -4864,8 +4864,36 @@ Object.keys(v)
 5 is the 6th arg resolving to variable m from the code m[y] = .... and it contains: ['dynamic-string','constant_string]
 eg ["IWZInZXnCl","4xrihv8zb8tf1mfj"]
 m[y] = m[1] = constant_string in this case 4xrihv8zb8tf1mfj
-
+m[0] = dynamic_string AKA CertifyID from init captcha response 
 P.apply(undefined,arguments) resolves to P(all the args from var v)
+
+// Important Note regarding the constant_string
+
+It is important to note that there are 10 possible values of the constant strings but only one is used at a time
+in my case that was 4xrihv8zb8tf1mfj
+
+Heres list of all the constant string def
+
+1. In case 0:
+ m[y] = B + (~s ? s : 0)(277, 56)
+B = nx.c(s, ~s ? 123 : 1, ~s ? 98
+B = fxt8jzp3
+s(277,56) = p0ienz71
+// resolution  m[y] = fxt8jzp3p0ienz71
+
+2. In case 1 (my case):
+ m[y] = M + nx.c(s, nx.j(-s, 59), nx.j(-s, 26)),
+nx.j = function(t, n) {return t || n}
+M = s(286, 78)
+M = 4xrihv8z
+s(59,26) = b8tf1mfj
+// resolution m[y] = 4xrihv8zb8tf1mfj
+
+3. In case 3:
+m[y] = k + (~s ? s : 8)(22, 44)
+
+s(22,44) = '8g52k8hy'
+
 ```
 
 **R constant Pool**
