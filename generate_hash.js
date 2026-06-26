@@ -203,4 +203,3 @@ function aliHashTrace(inputStr, saltStr) {
 
 var traced = aliHashTrace(input, '0000');
 console.log('Final:  ' + traced);
-console.log('Match:  ' + (traced === expected));
