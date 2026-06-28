@@ -13,7 +13,7 @@ import time
 access_key = "LTAI5tSEBwYMwVKAQGpxmvTd"
 secret = "YSKfst7GaVkXwZYvVihJsKF9r89koz"
 scene = "didk33e0"
-device_token = "1234567890"
+# device_token = "1234567890"  Works without device_token
 # ============================================================================
 # PART 1: InitCaptchaV3 - Get CertifyId
 # ============================================================================
@@ -33,7 +33,8 @@ def generate_signature(params, secret_key):
     signing_key = (secret_key + "&").encode('utf-8')                                                                                                                          signature = hmac.new(signing_key, string_to_sign.encode('utf-8'), hashlib.sha1)
     return base64.b64encode(signature.digest()).decode('utf-8')
 
-def make_captcha_request(access_key_id, secret_key, scene_id, device_token):
+# Device Token removed
+def make_captcha_request(access_key_id, secret_key, scene_id):
     nonce = generate_nonce()
     timestamp = get_timestamp()
     params = {
@@ -49,7 +50,6 @@ def make_captcha_request(access_key_id, secret_key, scene_id, device_token):
         'Timestamp': timestamp,
         'UpLang': 'true',
         'Version': '2023-03-05',
-        'DeviceToken': device_token,
     }
     signature = generate_signature(params, secret_key)
     params['Signature'] = signature
@@ -68,7 +68,7 @@ def make_captcha_request(access_key_id, secret_key, scene_id, device_token):
     )
     return response
 
-response = make_captcha_request(access_key, secret, scene, device_token)
+response = make_captcha_request(access_key, secret, scene) # Device token removed
 resp_data = response.json()
 print(f"Response: {json.dumps(resp_data, indent=2)}")
 
