@@ -30,7 +30,8 @@ def generate_signature(params, secret_key):
         for k, v in sorted_params
     ])
     string_to_sign = f"POST&%2F&{urllib.parse.quote(canonicalized_query, safe='')}"
-    signing_key = (secret_key + "&").encode('utf-8')                                                                                                                          signature = hmac.new(signing_key, string_to_sign.encode('utf-8'), hashlib.sha1)
+    signing_key = (secret_key + "&").encode('utf-8')                                                                                                                          
+    signature = hmac.new(signing_key, string_to_sign.encode('utf-8'), hashlib.sha1)
     return base64.b64encode(signature.digest()).decode('utf-8')
 
 # Device Token removed
