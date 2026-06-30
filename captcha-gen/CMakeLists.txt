@@ -31,6 +31,9 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(zlib)
 # ── SQLite3 amalgamation (self-contained, no system dependency) ───────────
 set(SQLITE3_DIR "${CMAKE_BINARY_DIR}/sqlite3-src")
+if(NOT DEFINED SQLITE3_URL)
+    set(SQLITE3_URL "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip")
+endif()
 if(NOT EXISTS "${SQLITE3_DIR}/sqlite3.c")
     message(STATUS "Downloading SQLite3 amalgamation...")
     file(DOWNLOAD ${SQLITE3_URL}
