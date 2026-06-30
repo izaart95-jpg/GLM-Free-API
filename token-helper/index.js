@@ -1,4 +1,6 @@
-import { chromium } from 'playwright';                                                                                                                                    import fs from 'fs';                                                                                                                                                      import path from 'path';
+import { chromium } from 'playwright';
+import fs from 'fs';
+import path from 'path';
 import readline from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
 import initSqlJs from 'sql.js';
@@ -8,6 +10,7 @@ const MAX_TOKENS = 5000;
 const DEFAULT_TOKENS = 2500;
 const SEND_WAIT_MS = 7000;       // wait after clicking send
 const MAX_RETRIES = 3;
+const TOKEN_COLLECTION_TIMEOUT_MS = 90000; // 90 seconds
 const URL = 'https://chat.z.ai';
 
 // ---------- Prompt user for token count ----------
@@ -77,18 +80,29 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       console.log(`⏳ Waiting ${SEND_WAIT_MS}ms for token endpoint to initialize...`);
       await sleep(SEND_WAIT_MS);
 
-      // ---------- Fast synchronous token collection ----------
+      // ---------- Fast synchronous token collection with timeout ----------
       console.log('🚀 Collecting tokens...');
       const t0 = Date.now();
 
+      // Create a timeout promise that rejects after TOKEN_COLLECTION_TIMEOUT_MS
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`⏱️ Token collection timed out after ${TOKEN_COLLECTION_TIMEOUT_MS / 1000}s`));
+        }, TOKEN_COLLECTION_TIMEOUT_MS);
+      });
+
       // FIX: getToken() is synchronous, so a simple loop is the fastest method
-      const tokens = await page.evaluate(({ total }) => {
-        const out = new Array(total);
-        for (let i = 0; i < total; i++) {
-          out[i] = window.z_um.getToken();
-        }
-        return out;
-      }, { total });
+      // Race the collection against the timeout
+      const tokens = await Promise.race([
+        page.evaluate(({ total }) => {
+          const out = new Array(total);
+          for (let i = 0; i < total; i++) {
+            out[i] = window.z_um.getToken();
+          }
+          return out;
+        }, { total }),
+        timeoutPromise,
+      ]);
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
       console.log(`✅ Collected ${tokens.length} tokens in ${elapsed}s`);
@@ -121,6 +135,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
         console.error('🚫 All retries exhausted.');
         throw error;
       }
+      console.log('♻️  Retrying with a fresh page load...');
     }
   }
 
