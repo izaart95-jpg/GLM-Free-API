@@ -5,12 +5,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 include(FetchContent)
 
-# ── Static linking (single statically linked binary) ──────────────────────
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# ── Dynamic linking (default; no static linker flags) ─────────────────────
 if(MSVC)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-else()
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -static-libstdc++")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:DLL>")
 endif()
 
 # ── Threads (pthread on Linux/macOS) ──────────────────────────────────────
@@ -62,64 +59,9 @@ if(UNIX)
     target_link_libraries(sqlite3 PUBLIC dl)
 endif()
 
-# ── curl + OpenSSL (statically linked, GSSAPI/Kerberos disabled) ──────────
-# System libcurl on Ubuntu is built with GSSAPI support, and pkg-config
-# --static then demands -lgssapi_krb5/-lkrb5/-lk5crypto — but Ubuntu only
-# ships those as .so, never as .a, so a fully static link against system
-# curl is impossible without compiling MIT krb5 from source yourself.
-# Instead of depending on system curl at all, curl is built from source
-# here via FetchContent with GSSAPI explicitly OFF, so the missing-symbol
-# problem never arises and the resulting binary stays 100% statically
-# linked. OpenSSL is still taken from the system (libssl-dev), since
-# building OpenSSL from source is its own can of worms and Ubuntu DOES
-# ship libssl.a/libcrypto.a statically.
-if(UNIX AND NOT APPLE)
-    find_package(OpenSSL REQUIRED)
-
-    set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
-    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_OPENSSL ON CACHE BOOL "" FORCE)
-    set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
-    set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_GSSAPI OFF CACHE BOOL "" FORCE)
-    set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
-    set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
-    set(CURL_DISABLE_RTSP ON CACHE BOOL "" FORCE)
-    set(USE_LIBRTMP OFF CACHE BOOL "" FORCE)
-    set(CURL_ZLIB ON CACHE BOOL "" FORCE)
-    set(ENABLE_UNIX_SOCKETS OFF CACHE BOOL "" FORCE)
-    set(CURL_DISABLE_TESTS ON CACHE BOOL "" FORCE)
-
-    FetchContent_Declare(
-        curl
-        GIT_REPOSITORY https://github.com/curl/curl.git
-        GIT_TAG        curl-8_10_1
-    )
-    FetchContent_MakeAvailable(curl)
-elseif(WIN32)
-    set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)   # Windows native TLS — no OpenSSL needed
-    set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
-    set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
-    set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
-    set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
-    set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
-    set(CURL_ZLIB ON CACHE BOOL "" FORCE)
-    set(CURL_DISABLE_TESTS ON CACHE BOOL "" FORCE)
-    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-
-    FetchContent_Declare(
-        curl
-        GIT_REPOSITORY https://github.com/curl/curl.git
-        GIT_TAG        curl-8_10_1
-    )
-    FetchContent_MakeAvailable(curl)
-else()
-    find_package(CURL REQUIRED)
-    find_package(OpenSSL REQUIRED)
-endif()
+# ── curl + OpenSSL (system, dynamically linked) ────────────────────────────
+find_package(CURL REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # ── Main executable ───────────────────────────────────────────────────────
 add_executable(main main.cpp)
@@ -128,14 +70,19 @@ target_include_directories(main PRIVATE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
 target_link_libraries(main
     nlohmann_json::nlohmann_json
     sqlite3
-    zlibstatic          # The statically built target from FetchContent
+    zlibstatic          # static target from FetchContent; zlib has no transitive deps so this is fine either way
     Threads::Threads
+    CURL::libcurl
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 if(UNIX AND NOT APPLE)
-    target_link_libraries(main libcurl OpenSSL::SSL OpenSSL::Crypto dl)
-elseif(WIN32)
-    target_link_libraries(main libcurl ws2_32 crypt32 bcrypt)
-else()
-    target_link_libraries(main CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
+    target_link_libraries(main dl)
+endif()
+
+# Windows needs ws2_32/crypt32/bcrypt for Winsock and TLS/crypto support
+# pulled in transitively by curl/OpenSSL.
+if(WIN32)
+    target_link_libraries(main ws2_32 crypt32 bcrypt)
 endif()
