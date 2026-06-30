@@ -30,7 +30,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(zlib)
 # ── SQLite3 amalgamation (self-contained, no system dependency) ───────────
-set(SQLITE3_URL "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip")
 set(SQLITE3_DIR "${CMAKE_BINARY_DIR}/sqlite3-src")
 if(NOT EXISTS "${SQLITE3_DIR}/sqlite3.c")
     message(STATUS "Downloading SQLite3 amalgamation...")
@@ -67,6 +66,13 @@ if(UNIX AND NOT APPLE)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(CURL_STATIC REQUIRED IMPORTED_TARGET libcurl)
     pkg_check_modules(OPENSSL_STATIC REQUIRED IMPORTED_TARGET openssl)
+
+    # Ubuntu/Debian never ship static (.a) builds of Kerberos/GSSAPI
+    # libraries — only shared (.so) ones — even though the system libcurl
+    # was built with GSSAPI support and pkg-config --static asks for them.
+    # Strip those specific flags from the static link line; they're added
+    # back below as an explicit dynamic link instead.
+    list(FILTER CURL_STATIC_STATIC_LDFLAGS EXCLUDE REGEX "gssapi_krb5|krb5|k5crypto|com_err|gssrpc|kdb5")
 else()
     find_package(CURL REQUIRED)
     find_package(OpenSSL REQUIRED)
@@ -83,10 +89,22 @@ target_link_libraries(main
 )
 if(UNIX AND NOT APPLE)
     # pkg-config's --static output already includes every transitive static
-    # dependency curl/openssl need (nghttp2, ssh, ldap, krb5, rtmp, psl,
-    # zstd, brotli, etc.) in the correct link order.
+    # dependency curl/openssl need (nghttp2, ssh, ldap, rtmp, psl, zstd,
+    # brotli, etc.) in the correct link order. Kerberos/GSSAPI was filtered
+    # out above since no static archive exists on Ubuntu — it's linked
+    # dynamically here instead, the only non-static part of the binary.
     target_compile_options(main PRIVATE ${CURL_STATIC_CFLAGS} ${OPENSSL_STATIC_CFLAGS})
-    target_link_libraries(main ${CURL_STATIC_STATIC_LDFLAGS} ${OPENSSL_STATIC_STATIC_LDFLAGS} dl)
+    target_link_libraries(main
+        ${CURL_STATIC_STATIC_LDFLAGS}
+        ${OPENSSL_STATIC_STATIC_LDFLAGS}
+        dl
+        -Wl,-Bdynamic
+        gssapi_krb5
+        krb5
+        k5crypto
+        com_err
+        -Wl,-Bstatic
+    )
 else()
     target_link_libraries(main CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
 endif()
