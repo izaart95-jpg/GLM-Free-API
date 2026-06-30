@@ -387,6 +387,12 @@ async function* sendToZAI(prompt, options = {}) {
     throw new Error(`Z.AI connection error: ${e.message}`);
   }
 
+  // ── ADDED: Response status and headers logging ──
+  if (config.logging.level === "debug") {
+    console.log("[DEBUG] Z.AI response status:", res.status, res.statusText);
+    console.log("[DEBUG] Z.AI response headers:", JSON.stringify(Object.fromEntries(res.headers.entries()), null, 2));
+  }
+
   if (res.status === 401) {
     session.initialized = false;
     await initializeSession();
@@ -396,6 +402,10 @@ async function* sendToZAI(prompt, options = {}) {
 
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
+    // ── ADDED: Error body logging ──
+    if (config.logging.level === "debug") {
+      console.error("[DEBUG] Z.AI error body:", errText);
+    }
     throw new Error(`Z.AI error ${res.status}: ${errText}`);
   }
 
@@ -406,6 +416,13 @@ async function* sendToZAI(prompt, options = {}) {
     buffer += decoder.decode(chunk, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop();
+
+    // ── ADDED: Raw SSE line dump ──
+    if (config.logging.level === "debug") {
+      for (const line of lines) {
+        if (line.trim()) console.log("[DEBUG] Z.AI SSE line:", line.trim());
+      }
+    }
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -418,7 +435,12 @@ async function* sendToZAI(prompt, options = {}) {
         if (json.data?.delta_content !== undefined) chunk = json.data.delta_content;
         else if (json.choices?.[0]?.delta?.content !== undefined) chunk = json.choices[0].delta.content;
         if (chunk) yield chunk;
-      } catch (e) {}
+      } catch (e) {
+        // ── ADDED: Parse failure logging ──
+        if (config.logging.level === "debug") {
+          console.warn("[DEBUG] Z.AI failed to parse SSE:", dataStr);
+        }
+      }
     }
   }
 
@@ -431,7 +453,12 @@ async function* sendToZAI(prompt, options = {}) {
         if (json.data?.delta_content !== undefined) chunk = json.data.delta_content;
         else if (json.choices?.[0]?.delta?.content !== undefined) chunk = json.choices[0].delta.content;
         if (chunk) yield chunk;
-      } catch (e) {}
+      } catch (e) {
+        // ── ADDED: Parse failure logging for buffer ──
+        if (config.logging.level === "debug") {
+          console.warn("[DEBUG] Z.AI failed to parse final SSE buffer:", dataStr);
+        }
+      }
     }
   }
 }
