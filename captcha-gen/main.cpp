@@ -671,62 +671,72 @@ void run_server() {
 }
 #else
 // ============================================================================
-// Named pipe server (POSIX FIFO) — computes payload only when a client connects
+// Named pipe server (POSIX FIFO pair) — computes payload only when a client
+// writes to the request pipe, then responds on the response pipe.
+// Two separate FIFOs are used (request/response) because a single FIFO with
+// multiple potential readers/writers is subject to read races between the
+// server's "is anyone connecting" probe and the actual client.
 // ============================================================================
 void run_server() {
     signal(SIGPIPE, SIG_IGN);
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
 
-    std::string pipe_path = "/tmp/" + PIPE_NAME;
+    std::string req_path  = "/tmp/" + PIPE_NAME + ".req";
+    std::string resp_path = "/tmp/" + PIPE_NAME + ".resp";
 
-    // Remove any stale FIFO from a previous run, then create fresh
-    unlink(pipe_path.c_str());
-    if (mkfifo(pipe_path.c_str(), 0666) != 0 && errno != EEXIST) {
-        log_error("mkfifo failed on '" + pipe_path + "': " + std::strerror(errno));
+    unlink(req_path.c_str());
+    unlink(resp_path.c_str());
+    if (mkfifo(req_path.c_str(), 0666) != 0 && errno != EEXIST) {
+        log_error("mkfifo failed on '" + req_path + "': " + std::strerror(errno));
+        return;
+    }
+    if (mkfifo(resp_path.c_str(), 0666) != 0 && errno != EEXIST) {
+        log_error("mkfifo failed on '" + resp_path + "': " + std::strerror(errno));
+        unlink(req_path.c_str());
         return;
     }
 
     while (g_running) {
-        // Open for read+write (O_RDWR) so open() doesn't block waiting for a
-        // writer; this also lets us poll g_running between client opens.
-        int fd = open(pipe_path.c_str(), O_RDONLY | O_NONBLOCK);
-        if (fd < 0) {
+        // Open request pipe non-blocking so we can poll g_running while idle
+        int rfd = open(req_path.c_str(), O_RDONLY | O_NONBLOCK);
+        if (rfd < 0) {
             if (errno != EINTR) {
-                log_error("open() on FIFO '" + pipe_path + "' failed: " + std::strerror(errno));
+                log_error("open() on request FIFO '" + req_path + "' failed: " + std::strerror(errno));
             }
             usleep(200000);
             continue;
         }
 
-        // Switch to blocking mode to detect an actual writer connecting
-        int flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+        // Switch to blocking mode to wait for an actual client to write
+        int flags = fcntl(rfd, F_GETFL, 0);
+        fcntl(rfd, F_SETFL, flags & ~O_NONBLOCK);
 
-        char probe;
-        ssize_t n = read(fd, &probe, 1); // blocks until a client writes or closes
-        close(fd);
+        char buf[256];
+        ssize_t n = read(rfd, buf, sizeof(buf));
+        close(rfd);
 
-        if (n <= 0) continue; // no real client connected, loop and re-check g_running
+        if (n <= 0) continue; // no real client request, loop and re-check g_running
 
         // Compute payload only when asked
         std::string payload = compute_final_payload();
         std::string response = payload.empty() ? "ERROR" : payload;
         response += "\n";
 
-        int wfd = open(pipe_path.c_str(), O_WRONLY | O_NONBLOCK);
+        int wfd = open(resp_path.c_str(), O_WRONLY);
         if (wfd < 0) {
-            log_error("Failed to open FIFO '" + pipe_path + "' for write: " + std::strerror(errno));
+            log_error("Failed to open response FIFO '" + resp_path + "' for write: " + std::strerror(errno));
             continue;
         }
         ssize_t written = write(wfd, response.c_str(), response.size());
         if (written < 0 || static_cast<size_t>(written) != response.size()) {
-            log_error("write() to FIFO failed or incomplete: " + std::string(std::strerror(errno)));
+            log_error("write() to response FIFO failed or incomplete: " + std::string(std::strerror(errno)));
         }
         close(wfd);
     }
 
-    unlink(pipe_path.c_str());
+    unlink(req_path.c_str());
+    unlink(resp_path.c_str());
 }
 #endif
 
