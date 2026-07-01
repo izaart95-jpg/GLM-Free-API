@@ -156,37 +156,41 @@ if (!_isWin) {
 
 function getCaptchaVerifyParam() {
   return new Promise((resolve, reject) => {
-    // 1. Open the request pipe for writing
-    const reqStream = fs.createWriteStream(CAPTCHA_REQ_PIPE);
-    let respStream = null;
+    let data = "";
+    let resolved = false;
 
-    const cleanup = () => {
-      if (respStream) respStream.destroy();
+    const finish = (err, val) => {
+      if (resolved) return;
+      resolved = true;
+      if (err) reject(err);
+      else resolve(val);
     };
 
-    reqStream.on("error", (err) => { cleanup(); reject(err); });
+    // 1. Open the RESPONSE pipe for reading FIRST.
+    // This will asynchronously wait for the external process to write to it.
+    const respStream = fs.createReadStream(CAPTCHA_RESP_PIPE, { encoding: "utf8" });
 
-    // When the write stream is open, write the trigger
-    reqStream.on("open", () => {
-      reqStream.write("1");
-      reqStream.end(); // Close the write pipe to signal the external process
+    respStream.on("error", (err) => finish(err));
+    
+    respStream.on("data", (chunk) => { 
+      data += chunk; 
+    });
+    
+    respStream.on("end", () => {
+      const result = data.trim();
+      if (!result) return finish(new Error("Captcha pipe returned empty response"));
+      finish(null, result);
     });
 
-    // When the write stream is completely finished and closed...
-    reqStream.on("finish", () => {
-      // 2. NOW open the response pipe for reading
-      let data = "";
-      respStream = fs.createReadStream(CAPTCHA_RESP_PIPE, { encoding: "utf8" });
+    // 2. Open the REQUEST pipe for writing and send the signal.
+    const reqStream = fs.createWriteStream(CAPTCHA_REQ_PIPE);
 
-      respStream.on("data", (chunk) => { data += chunk; });
-      
-      respStream.on("end", () => {
-        const result = data.trim();
-        if (!result) return reject(new Error("Captcha pipe returned empty response"));
-        resolve(result);
-      });
+    reqStream.on("error", (err) => finish(err));
 
-      respStream.on("error", (err) => { cleanup(); reject(err); });
+    reqStream.on("open", () => {
+      // Send the trigger. Using "\n" to mimic your shell `echo ''` exactly.
+      reqStream.write("1\n"); 
+      reqStream.end(); // Close the write pipe to signal the external process
     });
   });
 }
