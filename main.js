@@ -156,24 +156,37 @@ if (!_isWin) {
 
 function getCaptchaVerifyParam() {
   return new Promise((resolve, reject) => {
-    let data = "";
-    
-    // 1. Set up reader for the response pipe first
-    const respStream = fs.createReadStream(CAPTCHA_RESP_PIPE, { encoding: "utf8" });
-    
-    respStream.on("data", (chunk) => { data += chunk; });
-    respStream.on("end", () => {
-      const result = data.trim();
-      if (!result) return reject(new Error("Captcha pipe returned empty response"));
-      resolve(result);
-    });
-    respStream.on("error", reject);
-
-    // 2. Write trigger to req pipe
+    // 1. Open the request pipe for writing
     const reqStream = fs.createWriteStream(CAPTCHA_REQ_PIPE);
-    reqStream.on("error", reject);
+    let respStream = null;
+
+    const cleanup = () => {
+      if (respStream) respStream.destroy();
+    };
+
+    reqStream.on("error", (err) => { cleanup(); reject(err); });
+
+    // When the write stream is open, write the trigger
     reqStream.on("open", () => {
-      reqStream.write("1", () => reqStream.end());
+      reqStream.write("1");
+      reqStream.end(); // Close the write pipe to signal the external process
+    });
+
+    // When the write stream is completely finished and closed...
+    reqStream.on("finish", () => {
+      // 2. NOW open the response pipe for reading
+      let data = "";
+      respStream = fs.createReadStream(CAPTCHA_RESP_PIPE, { encoding: "utf8" });
+
+      respStream.on("data", (chunk) => { data += chunk; });
+      
+      respStream.on("end", () => {
+        const result = data.trim();
+        if (!result) return reject(new Error("Captcha pipe returned empty response"));
+        resolve(result);
+      });
+
+      respStream.on("error", (err) => { cleanup(); reject(err); });
     });
   });
 }
