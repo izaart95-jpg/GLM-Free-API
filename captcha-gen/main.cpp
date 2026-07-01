@@ -709,12 +709,25 @@ void run_server() {
         }
 
         // Switch to blocking mode to wait for an actual client to write
-        int flags = fcntl(rfd, F_GETFL, 0);
-        fcntl(rfd, F_SETFL, flags & ~O_NONBLOCK);
-
-        char buf[256];
-        ssize_t n = read(rfd, buf, sizeof(buf));
-        close(rfd);
+while (g_running) {
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(rfd, &fds);
+    struct timeval tv { .tv_sec = 0, .tv_usec = 200000 }; // 200ms
+    int sel = select(rfd + 1, &fds, nullptr, nullptr, &tv);
+    if (sel < 0) {
+        if (errno == EINTR) { close(rfd); goto next_iter; }
+        log_error("select() failed: " + std::string(std::strerror(errno)));
+        close(rfd); goto next_iter;
+    }
+    if (sel == 0) continue; // timeout — re-check g_running
+    // Data available
+    ssize_t n = read(rfd, buf, sizeof(buf));
+    close(rfd);
+    if (n <= 0) goto next_iter;
+    break; // got request
+}
+if (!g_running) { close(rfd); break; }
 
         if (n <= 0) continue; // no real client request, loop and re-check g_running
 
