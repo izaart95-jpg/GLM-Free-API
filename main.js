@@ -154,31 +154,49 @@ if (!_isWin) {
 }
 
 // Captcha Gen
-async function getCaptchaVerifyParam() {
-  let reqH = null, respH = null;
-  try {
-    // 1. Write trigger to req pipe
-    reqH = await fsp.open(CAPTCHA_REQ_PIPE, "w");
-    await reqH.write("1");
-    await reqH.close();
-    reqH = null;
+// ============== CAPTCHA NAMED-PIPE (cross-platform) ==============
 
-    // 2. Read base64 response from resp pipe
-    respH = await fsp.open(CAPTCHA_RESP_PIPE, "r");
-    const buf = Buffer.alloc(65536);
-    const { bytesRead } = await respH.read(buf, 0, 65536, 0);
-    await respH.close();
-    respH = null;
+const _isWin = process.platform === "win32";
+const _tmpDir = process.env.TEMPDIR || os.tmpdir();
+const CAPTCHA_REQ_PIPE = _isWin
+  ? "\\\\.\\pipe\\captcha_pipe.req"
+  : path.join(_tmpDir, "captcha_pipe.req");
+const CAPTCHA_RESP_PIPE = _isWin
+  ? "\\\\.\\pipe\\captcha_pipe.resp"
+  : path.join(_tmpDir, "captcha_pipe.resp");
 
-    const result = buf.toString("utf8", 0, bytesRead).trim();
-    if (!result) throw new Error("Captcha pipe returned empty response");
-    return result;
-  } finally {
-    if (reqH)  { try { await reqH.close();  } catch (_) {} }
-    if (respH) { try { await respH.close(); } catch (_) {} }
+// Ensure FIFOs exist on Linux
+if (!_isWin) {
+  for (const p of [CAPTCHA_REQ_PIPE, CAPTCHA_RESP_PIPE]) {
+    if (!fs.existsSync(p)) {
+      try { execSync(`mkfifo -m 666 "${p}"`); } catch (_) {}
+    }
   }
 }
 
+function getCaptchaVerifyParam() {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    
+    // 1. Set up reader for the response pipe first
+    const respStream = fs.createReadStream(CAPTCHA_RESP_PIPE, { encoding: "utf8" });
+    
+    respStream.on("data", (chunk) => { data += chunk; });
+    respStream.on("end", () => {
+      const result = data.trim();
+      if (!result) return reject(new Error("Captcha pipe returned empty response"));
+      resolve(result);
+    });
+    respStream.on("error", reject);
+
+    // 2. Write trigger to req pipe
+    const reqStream = fs.createWriteStream(CAPTCHA_REQ_PIPE);
+    reqStream.on("error", reject);
+    reqStream.on("open", () => {
+      reqStream.write("1", () => reqStream.end());
+    });
+  });
+}
 // ============================================================
 // ── FORMAT HELPERS ──────────────────────────────────────────
 // ============================================================
