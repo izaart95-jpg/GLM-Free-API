@@ -462,6 +462,7 @@ async function* sendToZAI(prompt, options = {}) {
     messages: forwardedMessages,
     signature_prompt: prompt,
     stream: true,
+    captcha_verify_param: captchaParam,
     features: {
       image_generation: imageGen,
       web_search: webSearch,
@@ -469,7 +470,6 @@ async function* sendToZAI(prompt, options = {}) {
       preview_mode: previewMode,
       flags: [],
       enable_thinking: thinking,
-      captcha_verify_param: captchaParam
     }
   };
 
