@@ -456,6 +456,7 @@ async function* sendToZAI(prompt, options = {}) {
     ? clientMessages
     : [...messages, { role: "user", content: prompt }];
 
+  const captchaParam = await getCaptchaVerifyParam();
   const requestBody = {
     model,
     chat_id: chatId,
@@ -468,12 +469,12 @@ async function* sendToZAI(prompt, options = {}) {
       auto_web_search: webSearch,
       preview_mode: previewMode,
       flags: [],
-      enable_thinking: thinking
+      enable_thinking: thinking,
+      captcha_verify_param: captchaParam
     }
   };
 
-  const captcha_verify_param = await getCaptchaVerifyParam();
-  const body = JSON.stringify(requestBody); console.log(captcha_verify_param);
+  const body = JSON.stringify(requestBody); console.log(captchaParam);
 
   if (config.logging.level === "debug") {
     console.log("[DEBUG] Z.AI url", url);
