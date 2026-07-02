@@ -443,13 +443,11 @@ async function* sendToZAI(prompt, options = {}) {
   const url = `${BASE_URL}/api/v2/chat/completions`;
 
   const headers = {
-    "Origin": BASE_URL,
-    "Referer": `${BASE_URL}/`,
-    "Authorization": `Bearer ${session.token}`,
-    "X-FE-Version": session.feVersion,
+    "authorization": `Bearer ${session.token}`,
+    "content-type": "application/json",
+    "x-fe-Version": session.feVersion,
     "x-region": "overseas",
-    "X-Signature": signature,
-    "Content-Type": "application/json"
+    "x-signature": signature
   };
 
   // ── Forward structured messages, NOT flattened prompt ──
