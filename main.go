@@ -2162,7 +2162,7 @@ func fetchModelsFromZAI() []ModelInfo {
         return fallbackModels
     }
     req.Header.Set("Accept", "application/json")
-
+    req.Header.Set("authorization", "Bearer "+session.Token)
     resp, err := zaiHTTPClient.Do(req)
     if err != nil {
         logError("fetchModels do: " + err.Error())
