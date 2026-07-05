@@ -34,7 +34,7 @@ An OpenAI API proxy for [chat.z.ai](https://chat.z.ai), letting you use Z.AI's m
 
 ```bash
 # 1. Clone the repository
-git clone <your-repo-url> zai-api
+git clone https://github.com/izaart95-jpg/GLM-Free-API/ zai-api
 cd zai-api
 
 # 2. Initialize the Go module
