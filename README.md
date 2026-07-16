@@ -80,12 +80,12 @@ go mod tidy
 # 3. Generate the token database
 go run captcha.go
 # Recommended: build first for better performance and faster startup:
-#   go build -o token-collector -ldflags="-s -w" captcha.go && ./token-collector
+#   go build -o token-collector -trimpath -gcflags="all=-l=4" -ldflags="-s -w" captcha.go && ./token-collector
 
 # 4. Start the server
 go run main.go
 # Recommended: build first for better performance and faster startup:
-#   go build -o zai-api -ldflags="-s -w" main.go && ./zai-api
+#   go build -o zai-api -trimpath -gcflags="all=-l=4" -ldflags="-s -w" main.go && ./zai-api
 ```
 
 On startup, you'll see a banner with your dashboard URL and auth token. The Z.AI session is initialised asynchronously — if guest init fails, the first chat request will retry it.
