@@ -1776,6 +1776,21 @@ func streamSSEResponse(body io.Reader, ch chan<- ZAIResult) error {
     scanner := bufio.NewScanner(body)
     scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
+    // ── Accumulated state across SSE lines ──
+    var fullText strings.Builder
+    sentLen := 0
+
+    flush := func() {
+        if fullText.Len() > sentLen {
+            delta := fullText.String()[sentLen:]
+            sentLen = fullText.Len()
+            ch <- ZAIResult{Chunk: delta, FullText: fullText.String()}
+        } else if fullText.Len() < sentLen {
+            // edit_content truncated the text — resync
+            sentLen = fullText.Len()
+        }
+    }
+
     for scanner.Scan() {
         line := scanner.Text()
         trimmed := strings.TrimSpace(line)
@@ -1789,6 +1804,7 @@ func streamSSEResponse(body io.Reader, ch chan<- ZAIResult) error {
         }
         dataStr := trimmed[6:]
         if dataStr == "[DONE]" {
+            flush()
             return nil
         }
 
@@ -1810,37 +1826,46 @@ func streamSSEResponse(body io.Reader, ch chan<- ZAIResult) error {
 
         if data, ok := j["data"].(map[string]interface{}); ok {
             if phase, ok := data["phase"].(string); ok && phase == "done" {
+                flush()
                 return nil
             }
         }
 
-        chunk := ""
+        // ── Content accumulation ──
         if data, ok := j["data"].(map[string]interface{}); ok {
             if ec, ok := data["edit_content"].(string); ok && ec != "" {
-                chunk = ec
-            } else if dc, ok := data["delta_content"].(string); ok && dc != "" {
-                chunk = dc
-            } else if tc, ok := data["content"].(string); ok && tc != "" {
-                chunk = tc
-            }
-        }
-        if chunk == "" {
-            if choices, ok := j["choices"].([]interface{}); ok && len(choices) > 0 {
-                if choice, ok := choices[0].(map[string]interface{}); ok {
-                    if delta, ok := choice["delta"].(map[string]interface{}); ok {
-                        if c, ok := delta["content"].(string); ok {
-                            chunk = c
-                        }
-                    }
+                // edit_content = FULL replacement starting at edit_index
+                editIndex := -1
+                if ei, ok := data["edit_index"].(float64); ok {
+                    editIndex = int(ei)
                 }
+                current := fullText.String()
+                if editIndex >= 0 {
+                    if editIndex <= len(current) {
+                        current = current[:editIndex] + ec
+                    } else {
+                        // Z.AI index beyond current length — pad
+                        for len(current) < editIndex {
+                            current += " "
+                        }
+                        current += ec
+                    }
+                } else {
+                    current += ec
+                }
+                fullText.Reset()
+                fullText.WriteString(current)
+            } else if dc, ok := data["delta_content"].(string); ok && dc != "" {
+                fullText.WriteString(dc)
+            } else if tc, ok := data["content"].(string); ok && tc != "" {
+                fullText.WriteString(tc)
             }
-        }
-        if chunk != "" {
-            ch <- ZAIResult{Chunk: chunk, FullText: chunk}
         }
 
+        flush()
     }
 
+    flush()
     return scanner.Err()
 }
 
