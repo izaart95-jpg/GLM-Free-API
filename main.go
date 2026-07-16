@@ -2916,6 +2916,11 @@ func main() {
     flag.BoolVar(&verbose, "verbose", false, "Enable verbose logging")
     flag.Parse()
 
+    if _, err := os.Stat(dbPath); err != nil {
+        log.Println("Captcha db not found! Please run captcha.go first")
+        os.Exit(1)
+    }
+
     logInfo("Starting with db-path='" + dbPath + "' verbose=true")
 
     if err := initDB(); err != nil {
