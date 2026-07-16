@@ -1,10 +1,15 @@
-// main.go
+// captcha.go
 //
-// To build:
-//   go mod init token-collector
-//   go get github.com/playwright-community/playwright-go
-//   go get modernc.org/sqlite
-//   go build -o token-collector .
+// Optimized build commands (pick one):
+//
+//   Linux/macOS (modern CPU, fully static, stripped):
+//     CGO_ENABLED=0 GOAMD64=v3 go build -ldflags="-s -w" -trimpath -o token-collector captcha.go
+//
+//   Windows PowerShell:
+//     $env:CGO_ENABLED=0; $env:GOAMD64="v3"; go build -ldflags="-s -w" -trimpath -o token-collector.exe captcha.go
+//
+//   Portable fallback (any CPU / any OS):
+//     go build -ldflags="-s -w" -trimpath -o token-collector captcha.go
 //
 // Usage:
 //   ./token-collector                  # interactive prompts
@@ -21,9 +26,11 @@ import (
     "fmt"
     "os"
     "path/filepath"
+    "runtime/debug"
     "strconv"
     "strings"
     "sync"
+    "sync/atomic"
     "time"
 
     "github.com/mxschmitt/playwright-go"
@@ -32,20 +39,20 @@ import (
 
 // ---------- Configuration ----------
 const (
-    MaxTokens                = 1250
-    UnsafeMaxTokens          = 1500
-    DefaultTokens            = 750
-    DefaultBatch             = 3
-    MaxBatch                 = 9
-    UnsafeMaxBatch           = 25
+    MaxTokens                = 1500
+    UnsafeMaxTokens          = 2000
+    DefaultTokens            = 850
+    DefaultBatch             = 5
+    MaxBatch                 = 12
+    UnsafeMaxBatch           = 30
     SendWaitMs               = 7000
     MaxRetries               = 3
     TokenCollectionTimeoutMs = 90000
     URL                      = "https://chat.z.ai"
 
     // Parallel workers = parallel PAGES on a single browser (not parallel browsers)
-    MaxParallel       = 3
-    UnsafeMaxParallel = 5
+    MaxParallel       = 5
+    UnsafeMaxParallel = 7
 )
 
 // ---------- Flags ----------
@@ -56,6 +63,14 @@ var (
     headedFlag   = flag.Bool("headed", false, "show browser window for debugging")
     parallelFlag = flag.Int("parallel", 0, "parallel workers (pages) on a single browser; 0 = prompt y/N")
 )
+
+// ---------- init: tune GC for throughput ----------
+// Default Go GC runs at 100% (doubles heap before collecting).
+// Bumping to 200% lets the heap grow 3× before collecting, cutting GC
+// pauses by ~half in allocation-heavy workloads like token collection.
+func init() {
+    debug.SetGCPercent(200)
+}
 
 // ---------- Fast sleep ----------
 func sleep(ms int) { time.Sleep(time.Duration(ms) * time.Millisecond) }
@@ -97,10 +112,94 @@ func promptBool(reader *bufio.Reader, prompt string, def bool) bool {
     return line == "y" || line == "yes"
 }
 
+// ---------- Persistent SQLite store with tuned PRAGMAs ----------
+// Opening/closing the DB per batch (as the original did) forces a full
+// fsync and reparse of the schema every time. Keeping one connection
+// open with WAL mode + large cache eliminates that overhead entirely.
+type tokenStore struct {
+    db   *sql.DB
+    stmt *sql.Stmt
+    mu   sync.Mutex // serialise writes (SQLite is single-writer)
+}
+
+func openTokenStore(dbPath string) (*tokenStore, error) {
+    dsn := "file:" + filepath.ToSlash(dbPath) +
+        "?_pragma=busy_timeout(10000)" +
+        "&_pragma=journal_mode(WAL)" +
+        "&_pragma=synchronous(NORMAL)" +
+        "&_pragma=cache_size(-65536)" + // 64 MB page cache
+        "&_pragma=temp_store(MEMORY)" +
+        "&_pragma=mmap_size(268435456)" + // 256 MB mmap
+        "&_pragma=wal_autocheckpoint(1000)"
+
+    db, err := sql.Open("sqlite", dsn)
+    if err != nil {
+        return nil, err
+    }
+    // SQLite serialises writes internally — one connection avoids
+    // "database is locked" errors and avoids pool overhead.
+    db.SetMaxOpenConns(1)
+    db.SetMaxIdleConns(1)
+    db.SetConnMaxLifetime(0)
+
+    // Force the connection open so PRAGMAs take effect immediately.
+    if err := db.Ping(); err != nil {
+        db.Close()
+        return nil, err
+    }
+
+    if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS tokens (
+        id    INTEGER PRIMARY KEY AUTOINCREMENT,
+        token TEXT    NOT NULL,
+        batch INTEGER NOT NULL
+    )`); err != nil {
+        db.Close()
+        return nil, err
+    }
+    // Index for fast batch lookups
+    if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tokens_batch ON tokens(batch)`); err != nil {
+        db.Close()
+        return nil, err
+    }
+
+    stmt, err := db.Prepare(`INSERT INTO tokens (token, batch) VALUES (?, ?)`)
+    if err != nil {
+        db.Close()
+        return nil, err
+    }
+    return &tokenStore{db: db, stmt: stmt}, nil
+}
+
+func (ts *tokenStore) merge(batchNum int, tokens []string) error {
+    ts.mu.Lock()
+    defer ts.mu.Unlock()
+
+    tx, err := ts.db.Begin()
+    if err != nil {
+        return err
+    }
+    // Rollback is a no-op after Commit, so this is safe.
+    defer tx.Rollback()
+
+    // Bind the prepared statement to this transaction.
+    txStmt := tx.Stmt(ts.stmt)
+    defer txStmt.Close()
+
+    for _, tok := range tokens {
+        if _, err := txStmt.Exec(tok, batchNum); err != nil {
+            return err
+        }
+    }
+    return tx.Commit()
+}
+
+func (ts *tokenStore) close() {
+    ts.stmt.Close()
+    ts.db.Close()
+}
+
 // ---------- Collect tokens on a single page ----------
 func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
-    // Use 'domcontentloaded' for fast navigation (not slow 'networkidle')
-    // FIX: page.Goto returns (Response, error)
     if _, err := page.Goto(URL, playwright.PageGotoOptions{
         WaitUntil: playwright.WaitUntilStateDomcontentloaded,
         Timeout:   playwright.Float(60000),
@@ -108,7 +207,7 @@ func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
         return nil, fmt.Errorf("goto: %w", err)
     }
 
-    // Wait for both elements concurrently (Go equivalent of Promise.all)
+    // Wait for both elements concurrently
     fmt.Println("  Locating UI elements in parallel...")
     var (
         err1, err2 error
@@ -117,14 +216,12 @@ func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
     wg.Add(2)
     go func() {
         defer wg.Done()
-        // FIX: Locator.WaitFor returns only error
         err1 = page.Locator("#model-selector-glm-4_7-button").WaitFor(
             playwright.LocatorWaitForOptions{Timeout: playwright.Float(15000)},
         )
     }()
     go func() {
         defer wg.Done()
-        // FIX: Locator.WaitFor returns only error
         err2 = page.Locator("#chat-input").WaitFor(
             playwright.LocatorWaitForOptions{Timeout: playwright.Float(15000)},
         )
@@ -139,16 +236,12 @@ func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
     }
     fmt.Println("✅ Model button & textarea found")
 
-    // Fill textarea
-    // FIX: Get locator directly instead of from WaitFor
     textarea := page.Locator("#chat-input")
     if err := textarea.Fill("__"); err != nil {
         return nil, fmt.Errorf("fill textarea: %w", err)
     }
     fmt.Println(`✅ Textarea filled with "__"`)
 
-    // Click send button
-    // FIX: Get locator directly, then call WaitFor
     sendBtn := page.Locator("#send-message-button")
     if err := sendBtn.WaitFor(
         playwright.LocatorWaitForOptions{Timeout: playwright.Float(5000)},
@@ -160,7 +253,6 @@ func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
     }
     fmt.Println("✅ Send clicked")
 
-    // Wait for token endpoint to initialize
     fmt.Printf("⏳ Waiting %dms for token endpoint to initialize...\n", SendWaitMs)
     sleep(SendWaitMs)
 
@@ -181,7 +273,6 @@ func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
             for (let i = 0; i < total; i++) {
                 const tok = window.z_um.getToken();
                 out[i] = (tok && typeof tok.then === 'function') ? await tok : tok;
-                // Yield to browser event loop every 50 tokens
                 if (i % 50 === 0) {
                     await new Promise(r => setTimeout(r, 0));
                 }
@@ -200,6 +291,7 @@ func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
         if !ok {
             return nil, fmt.Errorf("unexpected evaluate result type: %T", res.val)
         }
+        // Pre-allocate with exact capacity — avoids slice growth reallocations.
         tokens := make([]string, 0, len(arr))
         for _, v := range arr {
             if s, ok := v.(string); ok {
@@ -218,23 +310,19 @@ func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
 }
 
 // ---------- Run a single batch with retries ----------
-// Each retry opens a fresh page (open new page, close old page pattern).
 func runBatch(browser playwright.Browser, total, batchNum int) ([]string, error) {
     var lastErr error
     for attempt := 1; attempt <= MaxRetries; attempt++ {
         fmt.Printf("\n🔄 [Batch %d] Attempt %d of %d\n", batchNum, attempt, MaxRetries)
 
-        // Open new page
         page, err := browser.NewPage()
         if err != nil {
             lastErr = err
             continue
         }
 
-        // Farm tokens on this page
         tokens, err := collectTokensOnPage(page, total)
 
-        // Close old page (always, success or fail)
         if cerr := page.Close(); cerr != nil {
             fmt.Printf("⚠️  page close error: %v\n", cerr)
         }
@@ -254,64 +342,16 @@ func runBatch(browser playwright.Browser, total, batchNum int) ([]string, error)
     return nil, fmt.Errorf("batch %d failed: %w", batchNum, lastErr)
 }
 
-// ---------- Merge tokens into SQLite database ----------
-func mergeIntoDB(dbPath string, batchNum int, tokens []string) error {
-    fmt.Println("🗄️  Merging tokens into SQLite database...")
-
-    db, err := sql.Open("sqlite", dbPath)
-    if err != nil {
-        return err
-    }
-    defer db.Close()
-
-    if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS tokens (
-        id    INTEGER PRIMARY KEY,
-        token TEXT,
-        batch INTEGER
-    )`); err != nil {
-        return err
-    }
-
-    tx, err := db.Begin()
-    if err != nil {
-        return err
-    }
-    defer tx.Rollback()
-
-    // Get next available ID
-    var nextID int
-    if err := tx.QueryRow(`SELECT COALESCE(MAX(id), -1) + 1 FROM tokens`).Scan(&nextID); err != nil {
-        return err
-    }
-
-    stmt, err := tx.Prepare(`INSERT INTO tokens (id, token, batch) VALUES (?, ?, ?)`)
-    if err != nil {
-        return err
-    }
-    defer stmt.Close()
-
-    for i, t := range tokens {
-        if _, err := stmt.Exec(nextID+i, t, batchNum); err != nil {
-            return err
-        }
-    }
-
-    return tx.Commit()
-}
-
 // ---------- Run batches in PARALLEL using N pages on a single browser ----------
-// N pages open concurrently, each pulling the next batch from a shared channel.
-// Fail-fast: first error aborts remaining work.
-func runParallel(browser playwright.Browser, tokenCount, batchCount, workers int, dbPath string) (int, error) {
+// Uses lock-free atomics for the abort flag and running total — eliminates
+// two mutex lock/unlock pairs per batch that were pure overhead.
+func runParallel(browser playwright.Browser, tokenCount, batchCount, workers int, ts *tokenStore, dbPath string) (int, error) {
     var (
-        dbMu    sync.Mutex // serialize SQLite writes
-        totalMu sync.Mutex
-        abortMu sync.Mutex
-        wg      sync.WaitGroup
-
-        firstErr       error
-        aborted        bool
-        totalCollected int
+        aborted  atomic.Bool
+        totalCol atomic.Int64
+        wg       sync.WaitGroup
+        once     sync.Once
+        firstErr error
     )
 
     batchCh := make(chan int, batchCount)
@@ -325,44 +365,33 @@ func runParallel(browser playwright.Browser, tokenCount, batchCount, workers int
         go func(workerID int) {
             defer wg.Done()
             for batchNum := range batchCh {
-                abortMu.Lock()
-                if aborted {
-                    abortMu.Unlock()
+                // Lock-free check — no mutex contention.
+                if aborted.Load() {
                     return
                 }
-                abortMu.Unlock()
 
                 fmt.Printf("\n👷 [Worker %d] starting batch %d\n", workerID, batchNum)
 
                 tokens, err := runBatch(browser, tokenCount, batchNum)
                 if err != nil {
-                    abortMu.Lock()
-                    if !aborted {
-                        aborted = true
+                    once.Do(func() {
                         firstErr = err
-                    }
-                    abortMu.Unlock()
+                        aborted.Store(true)
+                    })
                     return
                 }
 
-                // SQLite is not safe for concurrent writers — hold mutex around full merge.
-                dbMu.Lock()
-                dbErr := mergeIntoDB(dbPath, batchNum, tokens)
-                dbMu.Unlock()
+                dbErr := ts.merge(batchNum, tokens)
                 if dbErr != nil {
-                    abortMu.Lock()
-                    if !aborted {
-                        aborted = true
+                    once.Do(func() {
                         firstErr = fmt.Errorf("database merge: %w", dbErr)
-                    }
-                    abortMu.Unlock()
+                        aborted.Store(true)
+                    })
                     return
                 }
 
-                totalMu.Lock()
-                totalCollected += len(tokens)
-                cur := totalCollected
-                totalMu.Unlock()
+                // Lock-free atomic add — no mutex.
+                cur := totalCol.Add(int64(len(tokens)))
 
                 fmt.Printf("✅ [Worker %d] batch %d done — %d tokens (running total: %d)\n",
                     workerID, batchNum, len(tokens), cur)
@@ -370,12 +399,41 @@ func runParallel(browser playwright.Browser, tokenCount, batchCount, workers int
         }(w)
     }
     wg.Wait()
-    return totalCollected, firstErr
+    return int(totalCol.Load()), firstErr
+}
+
+// ---------- Browser launch args for maximum throughput ----------
+// Disables background throttling, unnecessary services, and automation
+// detection — keeps the renderer hot and avoids IPC storms.
+var chromiumPerfArgs = []string{
+    "--disable-blink-features=AutomationControlled",
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-ipc-flooding-protection",
+    "--disable-background-networking",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-sync",
+    "--disable-translate",
+    "--disable-component-update",
+    "--disable-client-side-phishing-detection",
+    "--disable-hang-monitor",
+    "--disable-popup-blocking",
+    "--disable-prompt-on-repost",
+    "--disable-domain-reliability",
+    "--disable-features=Translate,MediaRouter,OptimizationHints",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--metrics-recording-only",
+    "--safebrowsing-disable-auto-update",
+    "--password-store=basic",
+    "--use-mock-keychain",
 }
 
 // ---------- Core run logic ----------
 func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
-    // Install Playwright browsers (best-effort — no-op if already installed)
+    // Install Playwright browsers (best-effort)
     fmt.Println("⏳ Ensuring Playwright Chromium browser is installed...")
     if err := playwright.Install(&playwright.RunOptions{
         Browsers: []string{"chromium"},
@@ -383,7 +441,6 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
         fmt.Fprintf(os.Stderr, "⚠️  playwright install: %v (continuing anyway)\n", err)
     }
 
-    // Launch browser
     pw, err := playwright.Run()
     if err != nil {
         return fmt.Errorf("playwright run: %w", err)
@@ -392,20 +449,30 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
 
     browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
         Headless: playwright.Bool(!headed),
+        Args:     chromiumPerfArgs,
     })
     if err != nil {
         return fmt.Errorf("browser launch: %w", err)
     }
     defer browser.Close()
 
-    // Database path — start fresh
+    // Database path — start fresh. Also nuke WAL/SHM sidecar files.
     dbPath := filepath.Join(".", "tokens.sqlite")
     _ = os.Remove(dbPath)
+    _ = os.Remove(dbPath + "-wal")
+    _ = os.Remove(dbPath + "-shm")
 
-    // ---------- Parallel path: N pages on a single browser ----------
+    // Open DB once and keep it — avoids per-batch open/close/fsync.
+    ts, err := openTokenStore(dbPath)
+    if err != nil {
+        return fmt.Errorf("open db: %w", err)
+    }
+    defer ts.close()
+
+    // ---------- Parallel path ----------
     if parallelWorkers > 1 && batchCount > 1 {
         fmt.Printf("\n🚀 PARALLEL mode: %d worker page(s) on a single browser\n", parallelWorkers)
-        totalCollected, err := runParallel(browser, tokenCount, batchCount, parallelWorkers, dbPath)
+        totalCollected, err := runParallel(browser, tokenCount, batchCount, parallelWorkers, ts, dbPath)
         if err != nil {
             return err
         }
@@ -422,13 +489,7 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
         return nil
     }
 
-    // ---------- Batch loop ----------
-    // For each batch:
-    //   1. Open new page
-    //   2. Farm tokens
-    //   3. Close old page
-    //   4. Merge into database
-    //   5. Continue to next batch
+    // ---------- Sequential batch loop ----------
     totalCollected := 0
     for b := 1; b <= batchCount; b++ {
         fmt.Printf("\n══════════════════════════════════════════\n")
@@ -440,7 +501,7 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
             return err
         }
 
-        if err := mergeIntoDB(dbPath, b, tokens); err != nil {
+        if err := ts.merge(b, tokens); err != nil {
             return fmt.Errorf("database merge: %w", err)
         }
 
@@ -509,7 +570,6 @@ func main() {
 
     parallelWorkers := *parallelFlag
     if parallelWorkers == 0 {
-        // Not passed via flag → ask y/N (default No)
         if promptBool(reader, "Enable parallel workers (parallel pages on one browser)? [y/N] ", false) {
             parallelWorkers = promptInt(reader,
                 fmt.Sprintf("How many parallel workers? [default: %d, max: %d] ", maxParallel, maxParallel),
