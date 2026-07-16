@@ -39,20 +39,20 @@ import (
 
 // ---------- Configuration ----------
 const (
-    MaxTokens                = 1500
-    UnsafeMaxTokens          = 2000
-    DefaultTokens            = 850
-    DefaultBatch             = 5
-    MaxBatch                 = 12
-    UnsafeMaxBatch           = 30
+    MaxTokens                = 1250
+    UnsafeMaxTokens          = 1500
+    DefaultTokens            = 750
+    DefaultBatch             = 3
+    MaxBatch                 = 9
+    UnsafeMaxBatch           = 25
     SendWaitMs               = 7000
     MaxRetries               = 3
     TokenCollectionTimeoutMs = 90000
     URL                      = "https://chat.z.ai"
 
     // Parallel workers = parallel PAGES on a single browser (not parallel browsers)
-    MaxParallel       = 5
-    UnsafeMaxParallel = 7
+    MaxParallel       = 3
+    UnsafeMaxParallel = 5
 )
 
 // ---------- Flags ----------
