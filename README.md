@@ -78,9 +78,9 @@ go mod init zai-api
 go mod tidy
 
 # 3. Generate the token database
-go run init.go
+go run captcha.go
 # Recommended: build first for better performance and faster startup:
-#   go build -o token-collector -ldflags="-s -w" init.go && ./token-collector
+#   go build -o token-collector -ldflags="-s -w" captcha.go && ./token-collector
 
 # 4. Start the server
 go run main.go
@@ -340,7 +340,7 @@ curl -X POST http://localhost:3001/v1/chat/completions \
 ```
 zai-api/
 ├── main.go          # HTTP server, captcha generation, Z.AI bridge, OpenAI shim
-├── init.go          # Seeds tokens.sqlite with device tokens
+├── captcha.go          # Seeds tokens.sqlite with device tokens
 ├── tokens.sqlite    # Generated token pool (consumed at runtime)
 ├── go.mod
 └── README.md
@@ -350,7 +350,7 @@ zai-api/
 
 ## Notes
 
-- Device tokens are **consumed and deleted** after use. Re-run `init.go` to replenish the pool. Each request tries up to 2 tokens.
+- Device tokens are **consumed and deleted** after use. Re-run `captcha.go` to replenish the pool. Each request tries up to 2 tokens.
 - The default auth token (`Waguri`) is a placeholder — set `AUTH_TOKEN` in production.
 - `ZAI_TOKEN` bypasses guest initialization entirely. Without it, Z.AI's guest session typically only permits `glm-4.7`.
 - `LOG_LEVEL=debug` dumps every Z.AI request body, response status/headers, and SSE lines — useful for troubleshooting.
