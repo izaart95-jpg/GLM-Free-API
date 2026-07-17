@@ -47,7 +47,7 @@ const (
     UnsafeMaxBatch           = 25
     SendWaitMs               = 7000
     MaxRetries               = 5
-    TokenCollectionTimeoutMs = 90000
+    TokenCollectionTimeoutMs = 150000
     URL                      = "https://chat.z.ai"
 
     // Parallel workers = parallel PAGES on a single browser (not parallel browsers)
