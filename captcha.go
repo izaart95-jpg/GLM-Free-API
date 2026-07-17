@@ -46,7 +46,7 @@ const (
     MaxBatch                 = 9
     UnsafeMaxBatch           = 25
     SendWaitMs               = 7000
-    MaxRetries               = 3
+    MaxRetries               = 5
     TokenCollectionTimeoutMs = 90000
     URL                      = "https://chat.z.ai"
 
