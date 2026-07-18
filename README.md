@@ -132,8 +132,6 @@ On startup, you'll see a banner with your dashboard URL and auth token. The Z.AI
 | `model` | string | `glm-5` | Any model ID from `/v1/models` |
 | `messages` | array | *(required)* | OpenAI-style message array |
 | `stream` | bool | `true` | SSE stream when true |
-| `webSearch` | bool | *(per-model)* | Enables `web_search` + `auto_web_search` for this request |
-| `search` | bool | *(per-model)* | Alias for `webSearch` (used if `webSearch` is absent) |
 | `deepThink` | bool | *(per-model)* | Enables `think` + `enable_thinking` for this request |
 
 #### Request headers
@@ -170,7 +168,7 @@ Features are resolved **per model** (not globally). The resolution logic is:
 
 1. Start from the model's server capabilities.
 2. If `Include-All-Features: true` header has been set for that model → include **all** capabilities.
-   Otherwise include only `web_search`, `think`, `preview_mode` by default.
+   Otherwise include only `think`, `preview_mode` by default.
 3. Apply stored user overrides (per-model).
 4. **Always force `image_generation = false`** (overrides are ignored for this key).
 
@@ -188,7 +186,7 @@ Features are resolved **per model** (not globally). The resolution logic is:
       "glm-4.7": {
         "includeAll": false,
         "overrides": {
-          "web_search": true,
+          "preview_mode": true,
           "think": true
         }
       }
@@ -206,18 +204,15 @@ Features are resolved **per model** (not globally). The resolution logic is:
   {
     "model": "glm-4.7",
     "features": {
-      "web_search": true,
       "think": true,
       "preview_mode": false,
       "image_generation": false
     },
     "includeAll": false,
     "overrides": {
-      "web_search": true,
       "think": true
     },
     "capabilities": {
-      "web_search": true,
       "think": true,
       "preview_mode": false,
       "image_generation": true
@@ -227,15 +222,15 @@ Features are resolved **per model** (not globally). The resolution logic is:
 
 ### `POST /features`
 
-Body **must** contain `model`. Any other key is treated as a feature override and is normalised to snake_case (e.g. `webSearch` → `web_search`, `deepThink` → `think`, `imageGen` → `image_generation`).
+Body **must** contain `model`. Any other key is treated as a feature override and is normalised to snake_case (e.g. `deepThink` → `think`, `imageGen` → `image_generation`).
 
-**Toggle web search and thinking for `glm-4.7`:**
+**Toggle thinking for `glm-4.7`:**
 
 ```bash
 curl -X POST http://localhost:3001/features \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer Waguri" \
-  -d '{"model":"glm-4.7","webSearch":true,"thinking":true}'
+  -d '{"model":"glm-4.7","thinking":true}'
 ```
 
 Response:
@@ -246,11 +241,9 @@ Response:
   "model": "glm-4.7",
   "includeAll": false,
   "overrides": {
-    "web_search": true,
     "think": true
   },
   "features": {
-    "web_search": true,
     "think": true,
     "preview_mode": false,
     "image_generation": false
@@ -302,7 +295,7 @@ curl -N -X POST http://localhost:3001/v1/chat/completions \
   }'
 ```
 
-**Web search + deep thinking**
+**Deep thinking**
 
 ```bash
 curl -N -X POST http://localhost:3001/v1/chat/completions \
@@ -311,7 +304,6 @@ curl -N -X POST http://localhost:3001/v1/chat/completions \
   -d '{
     "model": "glm-4.7",
     "stream": true,
-    "webSearch": true,
     "deepThink": true,
     "messages": [{"role": "user", "content": "Summarize today'\''s top AI news."}]
   }'
