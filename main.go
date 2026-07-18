@@ -394,7 +394,7 @@ func resolveFeaturesWithState(caps map[string]interface{}, state *ModelFeatureSt
         }
     } else {
         // Include ONLY these three features by default
-        for _, k := range []string{"web_search", "think", "preview_mode"} {
+        for _, k := range []string{"auto_web_search", "think", "preview_mode"} {
             if v, ok := caps[k]; ok {
                 result[k] = v
             }
@@ -1514,8 +1514,8 @@ func sendToZAI(prompt string, opts SendOptions) (<-chan ZAIResult, error) {
 
     // Apply per-request overrides (highest precedence)
     if opts.WebSearch != nil {
-        featuresMap["web_search"] = *opts.WebSearch
         featuresMap["auto_web_search"] = *opts.WebSearch
+        featuresMap["web_search"] = false
     }
     if opts.Thinking != nil {
         featuresMap["think"] = *opts.Thinking
@@ -1612,9 +1612,10 @@ func sendToZAIStream(prompt string, opts struct {
         if v, ok := featuresPayload["think"].(bool); ok {
             featuresPayload["enable_thinking"] = v
         }
-        if v, ok := featuresPayload["web_search"].(bool); ok {
-            featuresPayload["auto_web_search"] = v
+        if v, ok := featuresPayload["auto_web_search"].(bool); ok {
+            _ = v // auto_web_search drives search; web_search is always suppressed
         }
+        featuresPayload["web_search"] = false
         featuresPayload["flags"] = []interface{}{}
         // image_generation is ALWAYS false
         featuresPayload["image_generation"] = false
@@ -2776,7 +2777,7 @@ func featuresHandler(w http.ResponseWriter, r *http.Request) {
 
     // Update session.Features for backward compat (dashboard display)
     session.mu.Lock()
-    if v, ok := resolved["web_search"].(bool); ok {
+    if v, ok := resolved["auto_web_search"].(bool); ok {
         session.Features.WebSearch = v
         session.Features.AutoWebSearch = v
     }
