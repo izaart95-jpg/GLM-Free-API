@@ -178,9 +178,10 @@ type ClientSession struct {
 
 
 type ZAIResult struct {
-    Chunk    string
-    FullText string
-    Err      error
+    Chunk     string
+    FullText  string
+    Reasoning string
+    Err       error
 }
 
 
@@ -200,6 +201,7 @@ type ResponseResult struct {
     Text         string
     Prompt       string
     FinishReason string
+    Reasoning    string
 }
 
 // ---------- Captcha JSON struct types ----------
@@ -1908,15 +1910,65 @@ func streamSSEResponse(body io.Reader, ch chan<- ZAIResult) error {
     // ── Accumulated state across SSE lines ──
     var fullText strings.Builder
     sentLen := 0
+    sentReasoning := 0
+
+    // stripDetailsTags removes <details ...> and </details> wrappers
+    // and leading "> " markdown-quote prefixes from each line.
+    stripDetailsTags := func(s string) string {
+        if idx := strings.Index(s, "<details"); idx >= 0 {
+            if end := strings.Index(s[idx:], ">"); end >= 0 {
+                s = s[:idx] + s[idx+end+1:]
+            }
+        }
+        s = strings.ReplaceAll(s, "</details>", "")
+        lines := strings.Split(s, "\n")
+        for i, l := range lines {
+            lines[i] = strings.TrimPrefix(l, "> ")
+        }
+        return strings.TrimSpace(strings.Join(lines, "\n"))
+    }
 
     flush := func() {
-        if fullText.Len() > sentLen {
-            delta := fullText.String()[sentLen:]
-            sentLen = fullText.Len()
-            ch <- ZAIResult{Chunk: delta, FullText: fullText.String()}
-        } else if fullText.Len() < sentLen {
-            // edit_content truncated the text — resync
-            sentLen = fullText.Len()
+        raw := fullText.String()
+
+        // Split <details ...> ... </details> into reasoning vs content
+        var reasoning, content string
+        if idx := strings.Index(raw, "<details"); idx >= 0 {
+            if tagEnd := strings.Index(raw[idx:], ">"); tagEnd >= 0 {
+                afterTag := raw[idx+tagEnd+1:]
+                if closeIdx := strings.Index(afterTag, "</details>"); closeIdx >= 0 {
+                    reasoning = afterTag[:closeIdx]
+                    content = raw[:idx] + afterTag[closeIdx+len("</details>"):]
+                } else {
+                    // <details> opened but not yet closed
+                    reasoning = afterTag
+                    content = raw[:idx]
+                }
+            } else {
+                content = raw // tag not complete yet
+            }
+        } else {
+            content = raw
+        }
+
+        if reasoning != "" {
+            reasoning = stripDetailsTags(reasoning)
+        }
+
+        // Emit content delta
+        if len(content) > sentLen {
+            ch <- ZAIResult{Chunk: content[sentLen:], FullText: content}
+            sentLen = len(content)
+        } else if len(content) < sentLen {
+            sentLen = len(content)
+        }
+
+        // Emit reasoning delta
+        if len(reasoning) > sentReasoning {
+            ch <- ZAIResult{Reasoning: reasoning[sentReasoning:]}
+            sentReasoning = len(reasoning)
+        } else if len(reasoning) < sentReasoning {
+            sentReasoning = len(reasoning)
         }
     }
 
@@ -2051,10 +2103,16 @@ func formatOpenAIResponse(result ResponseResult, model, requestId string, stream
         "choices": []map[string]interface{}{
             {
                 "index": 0,
-                "message": map[string]interface{}{
-                    "role":    "assistant",
-                    "content": rawContent,
-                },
+                "message": func() map[string]interface{} {
+                    m := map[string]interface{}{
+                        "role":    "assistant",
+                        "content": rawContent,
+                    }
+                    if result.Reasoning != "" {
+                        m["reasoning_content"] = result.Reasoning
+                    }
+                    return m
+                }(),
                 "finish_reason": "stop",
             },
         },
@@ -3034,6 +3092,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 
         fullContent := ""
         sentContent := ""
+        fullReasoning := ""
 
         var interceptor *agentStreamInterceptor
         if config.AgentMode {
@@ -3093,6 +3152,24 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
                     break
                 }
                 
+                if result.Reasoning != "" {
+                    fullReasoning += result.Reasoning
+                    rChunk := map[string]interface{}{
+                        "id":      "chatcmpl-" + requestId,
+                        "object":  "chat.completion.chunk",
+                        "created": time.Now().Unix(),
+                        "model":   model,
+                        "choices": []map[string]interface{}{
+                            {
+                                "index":         0,
+                                "delta":         map[string]interface{}{"reasoning_content": result.Reasoning},
+                                "finish_reason": nil,
+                            },
+                        },
+                    }
+                    writeSSE(toJSON(rChunk))
+                    continue
+                }
                 if result.FullText != "" {
                     fullContent = result.FullText
                 } else {
@@ -3176,11 +3253,16 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         fullContent := ""
+        fullReasoning := ""
         for result := range ch {
             if result.Err != nil {
                 log.Printf("[API] Error: %s", result.Err.Error())
                 writeJSON(w, statusFromError(result.Err.Error()), formatOpenAIError(result.Err.Error(), "api_error", nil))
                 return
+            }
+            if result.Reasoning != "" {
+                fullReasoning += result.Reasoning
+                continue
             }
             if result.FullText != "" {
                 fullContent = result.FullText
@@ -3213,11 +3295,17 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
                     "choices": []map[string]interface{}{
                         {
                             "index": 0,
-                            "message": map[string]interface{}{
-                                "role":       "assistant",
-                                "content":    stripped,
-                                "tool_calls": toolCalls,
-                            },
+                            "message": func() map[string]interface{} {
+                                m := map[string]interface{}{
+                                    "role":       "assistant",
+                                    "content":    stripped,
+                                    "tool_calls": toolCalls,
+                                }
+                                if fullReasoning != "" {
+                                    m["reasoning_content"] = fullReasoning
+                                }
+                                return m
+                            }(),
                             "finish_reason": "tool_calls",
                         },
                     },
@@ -3242,7 +3330,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         }
         session.mu.Unlock()
 
-        writeJSON(w, 200, formatOpenAIResponse(ResponseResult{Content: fullContent}, model, requestId, false))
+        writeJSON(w, 200, formatOpenAIResponse(ResponseResult{Content: fullContent, Reasoning: fullReasoning}, model, requestId, false))
     }
 }
 func featuresHandler(w http.ResponseWriter, r *http.Request) {
