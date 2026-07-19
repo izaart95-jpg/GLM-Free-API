@@ -274,6 +274,7 @@ var session = &SessionState{
     UserName:  "Guest",
     SaltKey:   SALT_KEY,
     FeVersion: DEFAULT_FE_VERSION,
+    Features:  Features{Thinking: true}, // enable_thinking on by default
 }
 
 var (
@@ -324,27 +325,10 @@ var (
     modelFeatureStatesMu sync.Mutex
 )
 
-// featureKeyMap maps client-facing key names to server capability keys.
-var featureKeyMap = map[string]string{
-    "webSearch":          "web_search",
-    "web_search":         "web_search",
-    "thinking":           "think",
-    "think":              "think",
-    "deepThink":          "think",
-    "imageGen":           "image_generation",
-    "image_gen":          "image_generation",
-    "image_generation":   "image_generation",
-    "previewMode":        "preview_mode",
-    "preview_mode":       "preview_mode",
-    "persistHistory":     "persist_history",
-    "persist_history":    "persist_history",
-}
-
-// normalizeFeatureKey converts a client key to the server capability key name.
+// normalizeFeatureKey converts a camelCase key to snake_case.
+// No alias mapping — users must use the real server capability key name.
+// Special handling for reasoning/thinking -> enable_thinking is done in featuresHandler.
 func normalizeFeatureKey(k string) string {
-    if mapped, ok := featureKeyMap[k]; ok {
-        return mapped
-    }
     var sb strings.Builder
     for i, r := range k {
         if i > 0 && r >= 'A' && r <= 'Z' {
@@ -377,9 +361,11 @@ func getModelFeatureState(modelID string) *ModelFeatureState {
 // resolveFeaturesForModel computes the final feature map for /completions.
 //
 // Rules:
-//   - Default: include ONLY web_search, think, preview_mode from server caps.
+//   - By default, auto_web_search and web_search are NOT included.
+//   - enable_thinking defaults to true for all models.
+//   - 'think' is never included — only enable_thinking reaches the request.
 //   - IncludeAll: include ALL server capabilities.
-//   - User overrides always take precedence over server defaults.
+//   - User overrides always take precedence.
 //   - image_generation is ALWAYS forced to false.
 func resolveFeaturesForModel(modelID string) map[string]interface{} {
     caps := getModelCapabilities(modelID)
@@ -396,6 +382,13 @@ func resolveFeaturesForModel(modelID string) map[string]interface{} {
 }
 
 // resolveFeaturesWithState does the actual resolution given caps + state.
+//
+// Rules:
+//   - By default, auto_web_search and web_search are NOT included.
+//   - enable_thinking defaults to true for all models.
+//   - 'think' is never included — only enable_thinking reaches the request.
+//   - User overrides always take precedence.
+//   - image_generation is ALWAYS forced to false.
 func resolveFeaturesWithState(caps map[string]interface{}, state *ModelFeatureState) map[string]interface{} {
     result := make(map[string]interface{})
 
@@ -404,19 +397,22 @@ func resolveFeaturesWithState(caps map[string]interface{}, state *ModelFeatureSt
         for k, v := range caps {
             result[k] = v
         }
-    } else {
-        // Include ONLY these three features by default
-        for _, k := range []string{"auto_web_search", "think", "preview_mode"} {
-            if v, ok := caps[k]; ok {
-                result[k] = v
-            }
-        }
     }
+    // By default: no auto_web_search, no web_search, no think.
+    // enable_thinking defaults to true (set below).
 
     // Apply user overrides (per-model stored overrides take precedence)
     for k, v := range state.Overrides {
         result[k] = v
     }
+
+    // enable_thinking defaults to true unless explicitly overridden
+    if _, ok := result["enable_thinking"]; !ok {
+        result["enable_thinking"] = true
+    }
+
+    // Remove 'think' entirely — only enable_thinking reaches the request
+    delete(result, "think")
 
     // ALWAYS exclude image_generation
     result["image_generation"] = false
@@ -1644,11 +1640,15 @@ func sendToZAI(prompt string, opts SendOptions) (<-chan ZAIResult, error) {
 
     // Apply per-request overrides (highest precedence)
     if opts.WebSearch != nil {
-        featuresMap["auto_web_search"] = *opts.WebSearch
-        featuresMap["web_search"] = false
+        if *opts.WebSearch {
+            featuresMap["auto_web_search"] = true
+            featuresMap["web_search"] = true
+        } else {
+            delete(featuresMap, "auto_web_search")
+            delete(featuresMap, "web_search")
+        }
     }
     if opts.Thinking != nil {
-        featuresMap["think"] = *opts.Thinking
         featuresMap["enable_thinking"] = *opts.Thinking
     }
     if opts.ImageGen != nil {
@@ -1658,7 +1658,8 @@ func sendToZAI(prompt string, opts SendOptions) (<-chan ZAIResult, error) {
         featuresMap["preview_mode"] = *opts.PreviewMode
     }
 
-    // ALWAYS force image_generation to false
+    // Remove 'think' entirely; ALWAYS force image_generation to false
+    delete(featuresMap, "think")
     featuresMap["image_generation"] = false
 
     chatID := opts.ChatID
@@ -1738,14 +1739,8 @@ func sendToZAIStream(prompt string, opts struct {
         for k, v := range opts.FeaturesMap {
             featuresPayload[k] = v
         }
-        // Set API-compatible aliases
-        if v, ok := featuresPayload["think"].(bool); ok {
-            featuresPayload["enable_thinking"] = v
-        }
-        if v, ok := featuresPayload["auto_web_search"].(bool); ok {
-            _ = v // auto_web_search drives search; web_search is always suppressed
-        }
-        featuresPayload["web_search"] = false
+        // Remove 'think' entirely — only enable_thinking reaches the request
+        delete(featuresPayload, "think")
         featuresPayload["flags"] = []interface{}{}
         // image_generation is ALWAYS false
         featuresPayload["image_generation"] = false
@@ -2527,15 +2522,12 @@ func fetchModelsFromZAI() []ModelInfo {
 }
 
 // getFeaturesForModel maps a model's capabilities to a Features struct.
+// enable_thinking defaults to true; web_search/auto_web_search default to false.
 func getFeaturesForModel(modelID string) Features {
-    f := Features{}
+    f := Features{Thinking: true} // enable_thinking enabled by default
     for _, m := range fetchModelsFromZAI() {
         if strings.EqualFold(m.ID, modelID) {
-            if v, ok := m.Capabilities["web_search"].(bool); ok {
-                f.WebSearch = v
-                f.AutoWebSearch = v
-            }
-            if v, ok := m.Capabilities["think"].(bool); ok {
+            if v, ok := m.Capabilities["enable_thinking"].(bool); ok {
                 f.Thinking = v
             }
             if v, ok := m.Capabilities["preview_mode"].(bool); ok {
@@ -2995,9 +2987,10 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         Model      string          `json:"model"`
         Messages   json.RawMessage `json:"messages"`
         Stream     *bool           `json:"stream"`
-        DeepThink  *bool           `json:"deepThink"`
-        Search     *bool           `json:"search"`
+        Reasoning  *bool           `json:"reasoning"`
+        Thinking   json.RawMessage `json:"thinking"`
         WebSearch  *bool           `json:"webSearch"`
+        Search     *bool           `json:"search"`
         Tools      json.RawMessage `json:"tools"`
         ToolChoice json.RawMessage `json:"tool_choice"`
     }
@@ -3060,13 +3053,25 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         ClientMessagesRaw: transformedMessages,
     }
 
+    // Parse thinking configuration:
+    //   reasoning: true/false  ->  enable_thinking
+    //   "thinking": {"type":"enabled"|"disabled"}  ->  enable_thinking
+    if body.Reasoning != nil {
+        opts.Thinking = body.Reasoning
+    } else if len(body.Thinking) > 0 {
+        var thinkCfg struct {
+            Type string `json:"type"`
+        }
+        if err := json.Unmarshal(body.Thinking, &thinkCfg); err == nil {
+            enabled := thinkCfg.Type == "enabled"
+            opts.Thinking = &enabled
+        }
+    }
+
     if body.WebSearch != nil {
         opts.WebSearch = body.WebSearch
     } else if body.Search != nil {
         opts.WebSearch = body.Search
-    }
-    if body.DeepThink != nil {
-        opts.Thinking = body.DeepThink
     }
 
     if stream {
@@ -3410,14 +3415,44 @@ func featuresHandler(w http.ResponseWriter, r *http.Request) {
         state.IncludeAll = true
     }
 
-    // Process user overrides — any key except "model" is treated as a feature override
+    // Process user overrides — any key except "model" is treated as a feature override.
+    // Special handling: reasoning/thinking -> enable_thinking
     for k, v := range body {
         if k == "model" {
             continue
         }
+
+        // reasoning: true/false -> enable_thinking
+        if k == "reasoning" {
+            if b, ok := v.(bool); ok {
+                state.Overrides["enable_thinking"] = b
+            }
+            continue
+        }
+
+        // "thinking": {"type":"enabled"|"disabled"} or thinking: true/false -> enable_thinking
+        if k == "thinking" {
+            if b, ok := v.(bool); ok {
+                state.Overrides["enable_thinking"] = b
+                continue
+            }
+            if m, ok := v.(map[string]interface{}); ok {
+                if t, ok := m["type"].(string); ok {
+                    state.Overrides["enable_thinking"] = (t == "enabled")
+                }
+                continue
+            }
+            continue
+        }
+
+        // All other keys: convert camelCase to snake_case (no alias mapping)
         snakeKey := normalizeFeatureKey(k)
         // image_generation overrides are ignored — always forced false
         if snakeKey == "image_generation" {
+            continue
+        }
+        // 'think' is not accepted — use enable_thinking, reasoning, or thinking
+        if snakeKey == "think" {
             continue
         }
         state.Overrides[snakeKey] = v
@@ -3439,7 +3474,7 @@ func featuresHandler(w http.ResponseWriter, r *http.Request) {
         session.Features.WebSearch = v
         session.Features.AutoWebSearch = v
     }
-    if v, ok := resolved["think"].(bool); ok {
+    if v, ok := resolved["enable_thinking"].(bool); ok {
         session.Features.Thinking = v
     }
     if v, ok := resolved["preview_mode"].(bool); ok {
