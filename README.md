@@ -167,7 +167,7 @@ Features are resolved **per model** (not globally). The resolution logic is:
 
 1. Start from the model's server capabilities.
 2. If `Include-All-Features: true` header has been set for that model → include **all** capabilities.
-   Otherwise include only `think`, `preview_mode` by default.
+   Otherwise include only `enable_thinking`, `preview_mode` by default.
 3. Apply stored user overrides (per-model).
 4. **Always force `image_generation = false`** (overrides are ignored for this key).
 
@@ -186,7 +186,7 @@ Features are resolved **per model** (not globally). The resolution logic is:
         "includeAll": false,
         "overrides": {
           "preview_mode": true,
-          "think": true
+          "enable_thinking": true
         }
       }
     }
@@ -209,10 +209,10 @@ Features are resolved **per model** (not globally). The resolution logic is:
     },
     "includeAll": false,
     "overrides": {
-      "think": true
+      "enable_thinking": true
     },
     "capabilities": {
-      "think": true,
+      "enable_thinking": true,
       "preview_mode": false,
       "image_generation": true
     }
@@ -221,7 +221,7 @@ Features are resolved **per model** (not globally). The resolution logic is:
 
 ### `POST /features`
 
-Body **must** contain `model`. Any other key is treated as a feature override and is normalised to snake_case (e.g. `deepThink` → `think`, `imageGen` → `image_generation`).
+Body **must** contain `model`. 
 
 **Toggle thinking for `glm-4.7`:**
 
@@ -229,7 +229,7 @@ Body **must** contain `model`. Any other key is treated as a feature override an
 curl -X POST http://localhost:3001/features \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer Waguri" \
-  -d '{"model":"glm-4.7","thinking":true}'
+  -d '{"model":"glm-4.7","enable_thinking":false}'
 ```
 
 Response:
@@ -240,10 +240,10 @@ Response:
   "model": "glm-4.7",
   "includeAll": false,
   "overrides": {
-    "think": true
+    "enable_thinking": true
   },
   "features": {
-    "think": true,
+    "enable_thinking": true,
     "preview_mode": false,
     "image_generation": false
   }
@@ -260,7 +260,7 @@ curl -X POST http://localhost:3001/features \
   -d '{"model":"glm-4.7"}'
 ```
 
-> `imageGen` / `image_generation` is **always** `false` — sending it in the body has no effect.
+> `image_generation` is **always** `false` — sending it in the body has no effect.
 
 ---
 
@@ -303,7 +303,7 @@ curl -N -X POST http://localhost:3001/v1/chat/completions \
   -d '{
     "model": "glm-4.7",
     "stream": true,
-    "deepThink": true,
+    "thinking": true,
     "messages": [{"role": "user", "content": "Summarize today'\''s top AI news."}]
   }'
 ```
