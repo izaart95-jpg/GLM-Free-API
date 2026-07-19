@@ -1295,7 +1295,7 @@ func (c *CaptchaCache) Run() {
         // Sweep expired
         var valid []cachedCaptcha
         for _, p := range c.params {
-            if time.Since(p.generatedAt) < 90*time.Second {
+            if time.Since(p.generatedAt) < 75*time.Second {
                 valid = append(valid, p)
             }
         }
