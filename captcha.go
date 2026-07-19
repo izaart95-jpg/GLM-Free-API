@@ -42,7 +42,7 @@ const (
     MaxTokens                = 1500
     UnsafeMaxTokens          = 1500
     DefaultTokens            = 850
-    DefaultBatch             = 3
+    DefaultBatch             = 5
     MaxBatch                 = 9
     UnsafeMaxBatch           = 25
     SendWaitMs               = 15000
