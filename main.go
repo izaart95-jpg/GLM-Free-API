@@ -3245,82 +3245,6 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         writeJSON(w, 200, formatOpenAIResponse(ResponseResult{Content: fullContent}, model, requestId, false))
     }
 }
-
-func promptHandler(w http.ResponseWriter, r *http.Request) {
-    if r.Method != "POST" {
-        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
-
-    var body struct {
-        Prompt    string `json:"prompt"`
-        Model     string `json:"model"`
-        Search    *bool  `json:"search"`
-        DeepThink *bool  `json:"deepThink"`
-        WebSearch *bool  `json:"webSearch"`
-    }
-    bodyBytes, _ := io.ReadAll(r.Body)
-    json.Unmarshal(bodyBytes, &body)
-
-    if body.Prompt == "" {
-        writeJSON(w, 400, map[string]interface{}{"error": "Prompt is required"})
-        return
-    }
-
-    reqSession := getOrCreateSession(r)
-
-    // Features are now resolved per-model inside sendToZAI.
-    opts := SendOptions{
-        Model:    body.Model,
-        ChatID:   reqSession.ChatID,
-        Messages: reqSession.Messages,
-    }
-    if body.WebSearch != nil {
-        opts.WebSearch = body.WebSearch
-    } else if body.Search != nil {
-        opts.WebSearch = body.Search
-    }
-    if body.DeepThink != nil {
-        opts.Thinking = body.DeepThink
-    }
-
-    ch, err := sendToZAI(body.Prompt, opts)
-    if err != nil {
-        log.Printf("[Prompt] Error: %s", err.Error())
-        writeJSON(w, 500, map[string]interface{}{"success": false, "error": err.Error()})
-        return
-    }
-
-    fullContent := ""
-    for result := range ch {
-        if result.Err != nil {
-            log.Printf("[Prompt] Error: %s", result.Err.Error())
-            
-            writeJSON(w, 500, map[string]interface{}{"success": false, "error": result.Err.Error()})
-            return
-        }
-        if result.FullText != "" {
-            fullContent = result.FullText
-        } else {
-            fullContent += result.Chunk
-        }
-    }
-
-
-    session.mu.Lock()
-    if session.Features.PersistHistory {
-        promptJSON, _ := json.Marshal(body.Prompt)
-        reqSession.Messages = append(reqSession.Messages, Message{Role: "user", Content: json.RawMessage(promptJSON)})
-        if fullContent != "" {
-            contentJSON, _ := json.Marshal(fullContent)
-            reqSession.Messages = append(reqSession.Messages, Message{Role: "assistant", Content: json.RawMessage(contentJSON)})
-        }
-    }
-    session.mu.Unlock()
-
-    writeJSON(w, 200, map[string]interface{}{"success": true, "response": fullContent})
-}
-
 func featuresHandler(w http.ResponseWriter, r *http.Request) {
     // ── GET: return resolved features for a model ──
     if r.Method == "GET" {
@@ -3592,7 +3516,6 @@ func main() {
     mux.HandleFunc("/v1/models", authMiddleware(modelsHandler))
     mux.HandleFunc("/models", authMiddleware(modelsHandler2))
     mux.HandleFunc("/v1/chat/completions", authMiddleware(chatCompletionsHandler))
-    mux.HandleFunc("/prompt", authMiddleware(promptHandler))
     mux.HandleFunc("/features", authMiddleware(featuresHandler))
     mux.HandleFunc("/admin/stats", statsHandler)
     mux.HandleFunc("/admin/health", healthHandler)
