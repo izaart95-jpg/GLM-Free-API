@@ -39,9 +39,9 @@ import (
 
 // ---------- Configuration ----------
 const (
-    MaxTokens                = 1250
+    MaxTokens                = 1500
     UnsafeMaxTokens          = 1500
-    DefaultTokens            = 750
+    DefaultTokens            = 850
     DefaultBatch             = 3
     MaxBatch                 = 9
     UnsafeMaxBatch           = 25
