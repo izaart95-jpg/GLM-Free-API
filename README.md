@@ -156,7 +156,6 @@ On startup, you'll see a banner with your dashboard URL and auth token. The Z.AI
 | `GET`  | `/features` | ✅ | Inspect resolved features / stored states |
 | `POST` | `/admin/session/clear` | ✅ | Clear all conversation histories |
 | `POST` | `/admin/clients/<id>/clear` | ✅ | Clear history (clears all in direct mode) |
-| `POST` | `/prompt` | ✅ | Non-OpenAI simple prompt endpoint (`{ prompt, model, ... }`) |
 | `POST` | `/stop` | ✅ | Acknowledged no-op (returns `{ success: true }`) |
 | `GET`  | `/inject.js` | ❌ | Returns `{"message":"Direct mode"}` |
 
@@ -306,18 +305,6 @@ curl -N -X POST http://localhost:3001/v1/chat/completions \
     "stream": true,
     "deepThink": true,
     "messages": [{"role": "user", "content": "Summarize today'\''s top AI news."}]
-  }'
-```
-
-**Using the `/prompt` endpoint**
-
-```bash
-curl -X POST http://localhost:3001/prompt \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer Waguri" \
-  -d '{
-    "model": "glm-4.7",
-    "prompt": "Tell me a joke."
   }'
 ```
 
