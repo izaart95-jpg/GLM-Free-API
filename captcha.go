@@ -63,6 +63,7 @@ var (
     batchFlag    = flag.Int("batch", 0, "number of batches (0 = prompt)")
     headedFlag   = flag.Bool("headed", false, "show browser window for debugging")
     parallelFlag = flag.Int("parallel", 0, "parallel workers (pages) on a single browser; 0 = prompt y/N")
+    blockTrackersFlag = flag.Bool("block-trackers", false, "enable URL allowlist filter to block trackers (off by default)")
 )
 
 // ---------- init: tune GC for throughput ----------
@@ -203,14 +204,17 @@ func (ts *tokenStore) close() {
 func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
     // ---------- Network allowlist: block everything not on the allowlist ----------
     // Route handler intercepts every request; urlAllowed() decides allow/deny.
-    if err := page.Route("**/*", func(route playwright.Route) {
-        if urlAllowed(route.Request().URL()) {
-            route.Continue()
-        } else {
-            route.Abort()
+    // Only active when --block-trackers flag is passed (off by default).
+    if *blockTrackersFlag {
+        if err := page.Route("**/*", func(route playwright.Route) {
+            if urlAllowed(route.Request().URL()) {
+                route.Continue()
+            } else {
+                route.Abort()
+            }
+        }); err != nil {
+            return nil, fmt.Errorf("route setup: %w", err)
         }
-    }); err != nil {
-        return nil, fmt.Errorf("route setup: %w", err)
     }
 
     if _, err := page.Goto(URL, playwright.PageGotoOptions{
