@@ -26,6 +26,7 @@ import (
     "fmt"
     "os"
     "path/filepath"
+    "regexp"
     "runtime/debug"
     "strconv"
     "strings"
@@ -200,6 +201,18 @@ func (ts *tokenStore) close() {
 
 // ---------- Collect tokens on a single page ----------
 func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
+    // ---------- Network allowlist: block everything not on the allowlist ----------
+    // Route handler intercepts every request; urlAllowed() decides allow/deny.
+    if err := page.Route("**/*", func(route playwright.Route) {
+        if urlAllowed(route.Request().URL()) {
+            route.Continue()
+        } else {
+            route.Abort()
+        }
+    }); err != nil {
+        return nil, fmt.Errorf("route setup: %w", err)
+    }
+
     if _, err := page.Goto(URL, playwright.PageGotoOptions{
         WaitUntil: playwright.WaitUntilStateDomcontentloaded,
         Timeout:   playwright.Float(60000),
@@ -429,6 +442,44 @@ var chromiumPerfArgs = []string{
     "--safebrowsing-disable-auto-update",
     "--password-store=basic",
     "--use-mock-keychain",
+}
+
+// ---------- Network allowlist (surgical URL filter) ----------
+// Pre-compiled regex patterns for wildcard rules only.
+// Simple prefix/exact rules use strings.HasPrefix / == (no regex overhead).
+var (
+    // https://z-cdn.chatglm.cn/z-ai/frontend/prod-fe-*/assets/index-*.js
+    reZCDN = regexp.MustCompile(`^https://z-cdn\.chatglm\.cn/z-ai/frontend/prod-fe-[^/]+/assets/index-[^/]+\.js$`)
+    // https://cloudauth-device-dualstack.*aliyuncs.com/
+    reCloudAuth = regexp.MustCompile(`^https://cloudauth-device-dualstack\.[^/]*aliyuncs\.com/`)
+    // https://g.alicdn.com/captcha-frontend/FeiLin/*/feilin*.*.js
+    reFeiLin = regexp.MustCompile(`^https://g\.alicdn\.com/captcha-frontend/FeiLin/[^/]+/feilin[^/]*\.[^/]*\.js$`)
+)
+
+// urlAllowed checks a URL against the allowlist.
+// Fast path: prefix checks via strings.HasPrefix (~5 ns each).
+// Slow path: regex only for wildcard patterns (3 of 5 rules).
+// Switch short-circuits on first match — most requests are decided
+// in O(prefix_length) without ever touching the regex engine.
+func urlAllowed(u string) bool {
+    switch {
+    // 1. Entire chat.z.ai domain — also allow wss:// for WebSocket upgrades
+    case strings.HasPrefix(u, "https://chat.z.ai/"), strings.HasPrefix(u, "wss://chat.z.ai/"):
+        return true
+    // 2. z-cdn build assets (prefix filter → regex confirm)
+    case strings.HasPrefix(u, "https://z-cdn.chatglm.cn/z-ai/frontend/prod-fe-"):
+        return reZCDN.MatchString(u)
+    // 3. Exact Aliyun captcha script (string equality, no regex)
+    case u == "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js":
+        return true
+    // 4. cloudauth-device-dualstack.*aliyuncs.com (prefix filter → regex confirm)
+    case strings.HasPrefix(u, "https://cloudauth-device-dualstack."):
+        return reCloudAuth.MatchString(u)
+    // 5. FeiLin captcha assets (prefix filter → regex confirm)
+    case strings.HasPrefix(u, "https://g.alicdn.com/captcha-frontend/FeiLin/"):
+        return reFeiLin.MatchString(u)
+    }
+    return false
 }
 
 // ---------- Core run logic ----------
