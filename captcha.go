@@ -202,21 +202,9 @@ func (ts *tokenStore) close() {
 
 // ---------- Collect tokens on a single page ----------
 func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
-    // ---------- Network allowlist: block everything not on the allowlist ----------
-    // Route handler intercepts every request; urlAllowed() decides allow/deny.
-    // Only active when --block-trackers flag is passed (off by default).
-    if *blockTrackersFlag {
-        if err := page.Route("**/*", func(route playwright.Route) {
-            if urlAllowed(route.Request().URL()) {
-                route.Continue()
-            } else {
-                route.Abort()
-            }
-        }); err != nil {
-            return nil, fmt.Errorf("route setup: %w", err)
-        }
-    }
-
+    // The page is reused across batches; route handlers (if any) were installed
+    // once at page creation in newWorkerPage. Each call here force-reloads
+    // the page by re-navigating to URL.
     if _, err := page.Goto(URL, playwright.PageGotoOptions{
         WaitUntil: playwright.WaitUntilStateDomcontentloaded,
         Timeout:   playwright.Float(60000),
@@ -326,23 +314,38 @@ func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
     }
 }
 
+// ---------- Create a worker page with optional route allowlist ----------
+// Route handlers persist across reloads on the same page, so the allowlist is
+// installed exactly once at page creation rather than per batch.
+func newWorkerPage(browser playwright.Browser) (playwright.Page, error) {
+    page, err := browser.NewPage()
+    if err != nil {
+        return nil, err
+    }
+    if *blockTrackersFlag {
+        if err := page.Route("**/*", func(route playwright.Route) {
+            if urlAllowed(route.Request().URL()) {
+                route.Continue()
+            } else {
+                route.Abort()
+            }
+        }); err != nil {
+            _ = page.Close()
+            return nil, fmt.Errorf("route setup: %w", err)
+        }
+    }
+    return page, nil
+}
+
 // ---------- Run a single batch with retries ----------
-func runBatch(browser playwright.Browser, total, batchNum int) ([]string, error) {
+// Reuses the given page across batches; collectTokensOnPage force-reloads it
+// on every call (and on every retry) by re-navigating to URL.
+func runBatch(page playwright.Page, total, batchNum int) ([]string, error) {
     var lastErr error
     for attempt := 1; attempt <= MaxRetries; attempt++ {
         fmt.Printf("\n🔄 [Batch %d] Attempt %d of %d\n", batchNum, attempt, MaxRetries)
 
-        page, err := browser.NewPage()
-        if err != nil {
-            lastErr = err
-            continue
-        }
-
         tokens, err := collectTokensOnPage(page, total)
-
-        if cerr := page.Close(); cerr != nil {
-            fmt.Printf("⚠️  page close error: %v\n", cerr)
-        }
 
         if err != nil {
             lastErr = err
@@ -351,7 +354,7 @@ func runBatch(browser playwright.Browser, total, batchNum int) ([]string, error)
                 fmt.Fprintln(os.Stderr, "🚫 All retries exhausted.")
                 break
             }
-            fmt.Println("♻️  Retrying with a fresh page load...")
+            fmt.Println("♻️  Retrying with a forced page reload...")
             continue
         }
         return tokens, nil
@@ -381,6 +384,18 @@ func runParallel(browser playwright.Browser, tokenCount, batchCount, workers int
         wg.Add(1)
         go func(workerID int) {
             defer wg.Done()
+            // Each worker keeps ONE page open for all its batches; every batch
+            // force-reloads the page instead of opening a new one and closing
+            // the old one.
+            page, perr := newWorkerPage(browser)
+            if perr != nil {
+                once.Do(func() {
+                    firstErr = fmt.Errorf("worker %d page: %w", workerID, perr)
+                    aborted.Store(true)
+                })
+                return
+            }
+            defer page.Close()
             for batchNum := range batchCh {
                 // Lock-free check — no mutex contention.
                 if aborted.Load() {
@@ -389,7 +404,7 @@ func runParallel(browser playwright.Browser, tokenCount, batchCount, workers int
 
                 fmt.Printf("\n👷 [Worker %d] starting batch %d\n", workerID, batchNum)
 
-                tokens, err := runBatch(browser, tokenCount, batchNum)
+                tokens, err := runBatch(page, tokenCount, batchNum)
                 if err != nil {
                     once.Do(func() {
                         firstErr = err
@@ -545,13 +560,21 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
     }
 
     // ---------- Sequential batch loop ----------
+    // Keep ONE page open across all batches; each batch force-reloads it
+    // instead of opening a new page and closing the old one.
+    page, err := newWorkerPage(browser)
+    if err != nil {
+        return fmt.Errorf("page create: %w", err)
+    }
+    defer page.Close()
+
     totalCollected := 0
     for b := 1; b <= batchCount; b++ {
         fmt.Printf("\n══════════════════════════════════════════\n")
         fmt.Printf("  BATCH %d of %d\n", b, batchCount)
         fmt.Printf("══════════════════════════════════════════\n")
 
-        tokens, err := runBatch(browser, tokenCount, b)
+        tokens, err := runBatch(page, tokenCount, b)
         if err != nil {
             return err
         }
