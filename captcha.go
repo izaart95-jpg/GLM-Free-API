@@ -34,6 +34,8 @@ import (
     "sync/atomic"
     "time"
 
+    tea "github.com/charmbracelet/bubbletea"
+    "github.com/charmbracelet/lipgloss"
     "github.com/mxschmitt/playwright-go"
     _ "modernc.org/sqlite" // pure-Go SQLite, no CGO needed
 )
@@ -64,6 +66,7 @@ var (
     headedFlag   = flag.Bool("headed", false, "show browser window for debugging")
     parallelFlag = flag.Int("parallel", 0, "parallel workers (pages) on a single browser; 0 = prompt y/N")
     blockTrackersFlag = flag.Bool("block-trackers", false, "enable URL allowlist filter to block trackers (off by default)")
+    noTUIFlag         = flag.Bool("no-tui", false, "disable TUI, use plain text output")
 )
 
 // ---------- init: tune GC for throughput ----------
@@ -73,6 +76,227 @@ var (
 func init() {
     debug.SetGCPercent(200)
 }
+
+// ---------- TUI (Bubble Tea) ----------
+var spinnerChars = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// logCapture stores log lines in a ring buffer for the TUI to display.
+type logCapture struct {
+    mu     sync.Mutex
+    lines  []string
+    maxLen int
+}
+
+func (lc *logCapture) addLine(line string) {
+    lc.mu.Lock()
+    lc.lines = append(lc.lines, line)
+    if len(lc.lines) > lc.maxLen {
+        lc.lines = lc.lines[len(lc.lines)-lc.maxLen:]
+    }
+    lc.mu.Unlock()
+}
+
+func (lc *logCapture) Lines() []string {
+    lc.mu.Lock()
+    defer lc.mu.Unlock()
+    out := make([]string, len(lc.lines))
+    copy(out, lc.lines)
+    return out
+}
+
+// Global TUI state — lock-free atomics for reads from the TUI goroutine.
+var (
+    tuiLogCapture      = &logCapture{maxLen: 1000}
+    tuiStatus          atomic.Value // string
+    tuiBatchesDone     atomic.Int64
+    tuiTokensCollected atomic.Int64
+    tuiTotalBatches    atomic.Int64
+    tuiTokensPerBatch  atomic.Int64
+    tuiWorkers         atomic.Int64
+    tuiParallel        atomic.Bool
+    tuiStartTime       atomic.Value // time.Time
+    tuiDone            atomic.Bool
+    tuiErr             atomic.Value // error
+)
+
+// init: initialise TUI default state
+func init() {
+    tuiStatus.Store("Initializing...")
+    tuiStartTime.Store(time.Now())
+}
+
+func tuiSetStatus(s string) { tuiStatus.Store(s) }
+
+// Bubble Tea messages
+type tickMsg time.Time
+type doneMsg struct{ err error }
+
+func tuiTick() tea.Cmd {
+    return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+// tuiModel is the Bubble Tea model for the token collector TUI.
+type tuiModel struct {
+    width     int
+    height    int
+    logOffset int // lines scrolled up from bottom
+    done      bool
+    err       error
+}
+
+func (m tuiModel) Init() tea.Cmd { return tuiTick() }
+
+func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+    switch msg := msg.(type) {
+    case tea.WindowSizeMsg:
+        m.width, m.height = msg.Width, msg.Height
+    case tea.KeyMsg:
+        switch msg.String() {
+        case "q", "ctrl+c":
+            return m, tea.Quit
+        case "up", "k":
+            m.logOffset++
+        case "down", "j":
+            if m.logOffset > 0 {
+                m.logOffset--
+            }
+        case "g":
+            m.logOffset = len(tuiLogCapture.Lines())
+        case "G":
+            m.logOffset = 0
+        }
+    case tickMsg:
+        if tuiDone.Load() {
+            m.done = true
+            if v := tuiErr.Load(); v != nil {
+                m.err = v.(error)
+            }
+            return m, tea.Quit
+        }
+        return m, tuiTick()
+    case doneMsg:
+        m.done = true
+        m.err = msg.err
+        return m, tea.Quit
+    }
+    return m, nil
+}
+
+func (m tuiModel) View() string {
+    if m.height < 10 || m.width < 40 {
+        return "Terminal too small (min 40x10). Resize or press q to quit."
+    }
+
+    // Color styles
+    stTitle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("213"))
+    stLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+    stAcc   := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
+    stWarn  := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
+    stDim   := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+    stBar   := lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
+
+    // Gather state from atomics (lock-free)
+    status := "Initializing..."
+    if v := tuiStatus.Load(); v != nil {
+        status = v.(string)
+    }
+    bd  := tuiBatchesDone.Load()
+    tb  := tuiTotalBatches.Load()
+    tc  := tuiTokensCollected.Load()
+    tpb := tuiTokensPerBatch.Load()
+    wk  := tuiWorkers.Load()
+
+    var st time.Time
+    if v := tuiStartTime.Load(); v != nil {
+        st = v.(time.Time)
+    }
+    elapsed := time.Since(st).Round(time.Second)
+
+    // --- Header / status block ---
+    var hdr strings.Builder
+    hdr.WriteString(stTitle.Render("🔑 Token Collector"))
+    hdr.WriteByte('\n')
+
+    if m.done {
+        if m.err != nil {
+            hdr.WriteString(stLabel.Render("Status: ") + stWarn.Render(fmt.Sprintf("ERROR: %v", m.err)))
+        } else {
+            hdr.WriteString(stLabel.Render("Status: ") + stAcc.Render("✅ COMPLETE"))
+        }
+    } else {
+        sp := spinnerChars[int(time.Now().UnixMilli()/200)%len(spinnerChars)]
+        hdr.WriteString(stLabel.Render("Status: ") + fmt.Sprintf("%s %s", sp, stAcc.Render(status)))
+    }
+    hdr.WriteByte('\n')
+
+    // Progress bar
+    if tb > 0 {
+        pct := float64(bd) / float64(tb)
+        bw := 20
+        f := int(pct * float64(bw))
+        if f > bw {
+            f = bw
+        }
+        bar := stBar.Render(strings.Repeat("█", f)) + stDim.Render(strings.Repeat("░", bw-f))
+        hdr.WriteString(fmt.Sprintf("%s %s  %s\n",
+            stLabel.Render("Progress:"),
+            bar,
+            stAcc.Render(fmt.Sprintf("%d/%d (%.0f%%)", bd, tb, pct*100))))
+    }
+
+    // Stats line
+    target := tb * tpb
+    stats := fmt.Sprintf("%s %s / %s",
+        stLabel.Render("Tokens:"),
+        stAcc.Render(fmt.Sprintf("%d", tc)),
+        stDim.Render(fmt.Sprintf("%d", target)))
+    if wk > 1 {
+        stats += fmt.Sprintf("  %s %s", stLabel.Render("Workers:"), stAcc.Render(fmt.Sprintf("%d", wk)))
+    }
+    stats += fmt.Sprintf("  %s %s", stLabel.Render("Elapsed:"), stAcc.Render(elapsed.String()))
+    hdr.WriteString(stats)
+    hdr.WriteByte('\n')
+
+    headerStr := hdr.String()
+    headerLines := strings.Count(headerStr, "\n")
+
+    // --- Log pane ---
+    logH := m.height - headerLines - 4 // -4: sep + log header + sep + footer
+    if logH < 2 {
+        logH = 2
+    }
+
+    logs := tuiLogCapture.Lines()
+    start := len(logs) - logH - m.logOffset
+    if start < 0 {
+        start = 0
+    }
+    end := start + logH
+    if end > len(logs) {
+        end = len(logs)
+    }
+
+    truncSt := lipgloss.NewStyle().MaxWidth(m.width)
+    var logLines []string
+    if len(logs) == 0 {
+        logLines = []string{stDim.Render("(waiting for output...)")}
+    } else if start < end {
+        for _, l := range logs[start:end] {
+            logLines = append(logLines, truncSt.Render(l))
+        }
+    } else {
+        logLines = []string{stDim.Render("(no more logs)")}
+    }
+    logStr := strings.Join(logLines, "\n")
+
+    // Separator and footer
+    sep := stDim.Render(strings.Repeat("─", m.width))
+    footer := stDim.Render(" ↑/↓ scroll  •  q quit")
+
+    return headerStr + sep + "\n" + stLabel.Render("📋 Logs") + "\n" + logStr + "\n" + sep + "\n" + footer
+}
+
+// ---------- End TUI ----------
 
 // ---------- Fast sleep ----------
 func sleep(ms int) { time.Sleep(time.Duration(ms) * time.Millisecond) }
@@ -213,6 +437,7 @@ func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
     }
 
     // Wait for both elements concurrently
+    tuiSetStatus("Locating UI elements...")
     fmt.Println("  Locating UI elements in parallel...")
     var (
         err1, err2 error
@@ -262,6 +487,7 @@ func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
     sleep(SendWaitMs)
 
     // ---------- Fast token collection with timeout ----------
+    tuiSetStatus(fmt.Sprintf("Collecting %d tokens...", total))
     fmt.Println("🚀 Collecting tokens...")
     t0 := time.Now()
 
@@ -343,6 +569,7 @@ func newWorkerPage(browser playwright.Browser) (playwright.Page, error) {
 func runBatch(page playwright.Page, total, batchNum int) ([]string, error) {
     var lastErr error
     for attempt := 1; attempt <= MaxRetries; attempt++ {
+        tuiSetStatus(fmt.Sprintf("Batch %d — attempt %d/%d", batchNum, attempt, MaxRetries))
         fmt.Printf("\n🔄 [Batch %d] Attempt %d of %d\n", batchNum, attempt, MaxRetries)
 
         tokens, err := collectTokensOnPage(page, total)
@@ -425,6 +652,8 @@ func runParallel(browser playwright.Browser, tokenCount, batchCount, workers int
                 // Lock-free atomic add — no mutex.
                 cur := totalCol.Add(int64(len(tokens)))
 
+                tuiBatchesDone.Add(1)
+                tuiTokensCollected.Add(int64(len(tokens)))
                 fmt.Printf("✅ [Worker %d] batch %d done — %d tokens (running total: %d)\n",
                     workerID, batchNum, len(tokens), cur)
             }
@@ -504,6 +733,7 @@ func urlAllowed(u string) bool {
 // ---------- Core run logic ----------
 func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
     // Install Playwright browsers (best-effort)
+    tuiSetStatus("Installing Playwright...")
     fmt.Println("⏳ Ensuring Playwright Chromium browser is installed...")
     if err := playwright.Install(&playwright.RunOptions{
         Browsers: []string{"chromium"},
@@ -511,6 +741,7 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
         fmt.Fprintf(os.Stderr, "⚠️  playwright install: %v (continuing anyway)\n", err)
     }
 
+    tuiSetStatus("Launching browser...")
     pw, err := playwright.Run()
     if err != nil {
         return fmt.Errorf("playwright run: %w", err)
@@ -541,6 +772,7 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
 
     // ---------- Parallel path ----------
     if parallelWorkers > 1 && batchCount > 1 {
+        tuiSetStatus(fmt.Sprintf("Parallel: %d workers", parallelWorkers))
         fmt.Printf("\n🚀 PARALLEL mode: %d worker page(s) on a single browser\n", parallelWorkers)
         totalCollected, err := runParallel(browser, tokenCount, batchCount, parallelWorkers, ts, dbPath)
         if err != nil {
@@ -560,6 +792,7 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
     }
 
     // ---------- Sequential batch loop ----------
+    tuiSetStatus("Starting sequential batches...")
     // Keep ONE page open across all batches; each batch force-reloads it
     // instead of opening a new page and closing the old one.
     page, err := newWorkerPage(browser)
@@ -584,6 +817,8 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
         }
 
         totalCollected += len(tokens)
+        tuiBatchesDone.Add(1)
+        tuiTokensCollected.Store(int64(totalCollected))
 
         if info, err := os.Stat(dbPath); err == nil {
             fmt.Printf("💾 Database: %s (%.1f KB) — %d tokens total across %d batch(es)\n",
@@ -660,6 +895,47 @@ func main() {
         parallelWorkers = maxParallel
     }
 
+    // ---------- TUI setup (before plan so plan shows in TUI logs) ----------
+    useTUI := !*noTUIFlag
+    var origStdout, origStderr *os.File
+    var pipeWriter *os.File
+
+    if useTUI {
+        origStdout = os.Stdout
+        origStderr = os.Stderr
+
+        r, w, perr := os.Pipe()
+        if perr != nil {
+            fmt.Fprintf(os.Stderr, "pipe error: %v\n", perr)
+            os.Exit(1)
+        }
+        pipeWriter = w
+        os.Stdout = w
+        os.Stderr = w
+
+        // Goroutine: read piped output → logCapture ring buffer.
+        // Non-blocking; uses 1MB scanner buffer for long lines.
+        go func() {
+            scanner := bufio.NewScanner(r)
+            scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+            for scanner.Scan() {
+                tuiLogCapture.addLine(scanner.Text())
+            }
+        }()
+
+        tuiTotalBatches.Store(int64(batchCount))
+        tuiTokensPerBatch.Store(int64(tokenCount))
+        wk := parallelWorkers
+        if wk < 1 {
+            wk = 1
+        }
+        tuiWorkers.Store(int64(wk))
+        tuiParallel.Store(parallelWorkers > 1)
+        tuiStartTime.Store(time.Now())
+        tuiStatus.Store("Starting...")
+    }
+
+    // ---------- Plan ----------
     fmt.Printf("\n🎯 Plan: %d tokens × %d batches = %d total tokens",
         tokenCount, batchCount, tokenCount*batchCount)
     if parallelWorkers > 1 {
@@ -668,9 +944,55 @@ func main() {
     fmt.Println()
 
     // ---------- Run ----------
-    if err := run(tokenCount, batchCount, parallelWorkers, *headedFlag); err != nil {
-        fmt.Fprintf(os.Stderr, "\n🚫 Fatal error: %v\n", err)
+    if !useTUI {
+        // Plain text mode — no TUI, original behaviour
+        if err := run(tokenCount, batchCount, parallelWorkers, *headedFlag); err != nil {
+            fmt.Fprintf(os.Stderr, "\n🚫 Fatal error: %v\n", err)
+            os.Exit(1)
+        }
+        fmt.Println("\n🎉 Script finished successfully.")
+        return
+    }
+
+    // ---------- TUI mode ----------
+    // tea.WithOutput(origStdout) sends TUI rendering to the real terminal
+    // while fmt.Println goes to the pipe → logCapture.
+    p := tea.NewProgram(tuiModel{},
+        tea.WithAltScreen(),
+        tea.WithOutput(origStdout),
+    )
+
+    go func() {
+        err := run(tokenCount, batchCount, parallelWorkers, *headedFlag)
+        if err == nil {
+            tuiSetStatus("Complete!")
+        }
+        tuiDone.Store(true)
+        if err != nil {
+            tuiErr.Store(err)
+        }
+        pipeWriter.Close() // EOF → scanner goroutine exits
+        p.Send(doneMsg{err: err})
+    }()
+
+    if _, err := p.Run(); err != nil {
+        os.Stdout = origStdout
+        os.Stderr = origStderr
+        fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
         os.Exit(1)
+    }
+
+    os.Stdout = origStdout
+    os.Stderr = origStderr
+
+    if v := tuiErr.Load(); v != nil {
+        fmt.Fprintf(os.Stderr, "\n🚫 Fatal error: %v\n", v.(error))
+        os.Exit(1)
+    }
+
+    if !tuiDone.Load() {
+        fmt.Println("\n⏹️  Interrupted by user.")
+        os.Exit(0)
     }
 
     fmt.Println("\n🎉 Script finished successfully.")
