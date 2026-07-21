@@ -194,6 +194,7 @@ type SendOptions struct {
     ChatID            string
     Messages          []Message
     ClientMessagesRaw json.RawMessage
+    ReasoningEffort   string // "high" or "max"; only forwarded if model supports it
 }
 
 type ResponseResult struct {
@@ -393,8 +394,13 @@ func resolveFeaturesWithState(caps map[string]interface{}, state *ModelFeatureSt
     result := make(map[string]interface{})
 
     if state.IncludeAll {
-        // Include ALL server capabilities
+        // Include ALL server capabilities except reasoning_effort
+        // (reasoning_effort in capabilities is a boolean support flag,
+        //  not an actual feature value — handled separately per-request)
         for k, v := range caps {
+            if k == "reasoning_effort" {
+                continue
+            }
             result[k] = v
         }
     }
@@ -405,6 +411,10 @@ func resolveFeaturesWithState(caps map[string]interface{}, state *ModelFeatureSt
     for k, v := range state.Overrides {
         result[k] = v
     }
+
+    // Defensive: reasoning_effort is never a stored feature — strip any stale value.
+    // It is a per-request parameter validated against model capabilities in sendToZAI.
+    delete(result, "reasoning_effort")
 
     // enable_thinking defaults to true unless explicitly overridden
     if _, ok := result["enable_thinking"]; !ok {
@@ -1658,6 +1668,34 @@ func sendToZAI(prompt string, opts SendOptions) (<-chan ZAIResult, error) {
         featuresMap["preview_mode"] = *opts.PreviewMode
     }
 
+    // ── reasoning_effort handling ──
+    // Defensive: always strip any stale reasoning_effort first so unsupported
+    // models never receive a placeholder value (would cause malfunction).
+    delete(featuresMap, "reasoning_effort")
+
+    if opts.ReasoningEffort != "" {
+        if modelSupportsReasoningEffort(model) {
+            if isValidReasoningEffort(opts.ReasoningEffort) {
+                // Forward reasoning_effort INSIDE the features payload
+                featuresMap["reasoning_effort"] = opts.ReasoningEffort
+                // When reasoning_effort is active, enable_thinking MUST be true
+                // and any user modification on enable_thinking is ignored.
+                featuresMap["enable_thinking"] = true
+                logInfo(fmt.Sprintf(
+                    "[reasoning_effort] model=%s effort=%s enabled (enable_thinking forced true)",
+                    model, opts.ReasoningEffort))
+            } else {
+                logError(fmt.Sprintf(
+                    "[reasoning_effort] invalid value '%s' for model=%s (accepted: high, max); ignored",
+                    opts.ReasoningEffort, model))
+            }
+        } else {
+            logInfo(fmt.Sprintf(
+                "[reasoning_effort] model=%s does not support reasoning_effort; parameter ignored",
+                model))
+        }
+    }
+
     // Remove 'think' entirely; ALWAYS force image_generation to false
     delete(featuresMap, "think")
     featuresMap["image_generation"] = false
@@ -1734,7 +1772,10 @@ func sendToZAIStream(prompt string, opts struct {
             return err
         }
 
-        // Build features payload from dynamically resolved per-model features
+        // Build features payload from dynamically resolved per-model features.
+        // reasoning_effort is only present in opts.FeaturesMap if the model supports
+        // it AND a valid value was provided — no placeholder is added for
+        // unsupported models (would cause malfunction).
         featuresPayload := make(map[string]interface{})
         for k, v := range opts.FeaturesMap {
             featuresPayload[k] = v
@@ -2549,6 +2590,32 @@ func getModelCapabilities(modelID string) map[string]interface{} {
     return nil
 }
 
+// modelSupportsReasoningEffort returns true only when the model's capabilities
+// JSON explicitly contains "reasoning_effort": true.
+// Models with "reasoning_effort": false or without the field are NOT supported.
+func modelSupportsReasoningEffort(modelID string) bool {
+    if modelID == "" {
+        return false
+    }
+    caps := getModelCapabilities(modelID)
+    if caps == nil {
+        return false
+    }
+    v, ok := caps["reasoning_effort"].(bool)
+    return ok && v
+}
+
+// isValidReasoningEffort validates the accepted reasoning_effort values.
+// Accepted: "high", "max". Any other value is rejected.
+func isValidReasoningEffort(value string) bool {
+    switch value {
+    case "high", "max":
+        return true
+    default:
+        return false
+    }
+}
+
 func modelsHandler(w http.ResponseWriter, r *http.Request) {
     now := time.Now().Unix()
     models := fetchModelsFromZAI()
@@ -2984,15 +3051,16 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     var body struct {
-        Model      string          `json:"model"`
-        Messages   json.RawMessage `json:"messages"`
-        Stream     *bool           `json:"stream"`
-        Reasoning  *bool           `json:"reasoning"`
-        Thinking   json.RawMessage `json:"thinking"`
-        WebSearch  *bool           `json:"webSearch"`
-        Search     *bool           `json:"search"`
-        Tools      json.RawMessage `json:"tools"`
-        ToolChoice json.RawMessage `json:"tool_choice"`
+        Model           string          `json:"model"`
+        Messages        json.RawMessage `json:"messages"`
+        Stream          *bool           `json:"stream"`
+        Reasoning       *bool           `json:"reasoning"`
+        Thinking        json.RawMessage `json:"thinking"`
+        WebSearch       *bool           `json:"webSearch"`
+        Search          *bool           `json:"search"`
+        Tools           json.RawMessage `json:"tools"`
+        ToolChoice      json.RawMessage `json:"tool_choice"`
+        ReasoningEffort string          `json:"reasoning_effort"`
     }
     bodyBytes, err := io.ReadAll(r.Body)
     if err != nil {
@@ -3051,6 +3119,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         ChatID:            reqSession.ChatID,
         Messages:          reqSession.Messages,
         ClientMessagesRaw: transformedMessages,
+        ReasoningEffort:   body.ReasoningEffort,
     }
 
     // Parse thinking configuration:
@@ -3453,6 +3522,11 @@ func featuresHandler(w http.ResponseWriter, r *http.Request) {
         }
         // 'think' is not accepted — use enable_thinking, reasoning, or thinking
         if snakeKey == "think" {
+            continue
+        }
+        // reasoning_effort is a per-request parameter validated against model
+        // capabilities; it is NOT stored as a persistent override.
+        if snakeKey == "reasoning_effort" {
             continue
         }
         state.Overrides[snakeKey] = v
