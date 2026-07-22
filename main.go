@@ -143,12 +143,11 @@ var config = loadConfig()
 // ---------- Z.AI types ----------
 
 type Features struct {
-    WebSearch      bool `json:"webSearch"`
-    AutoWebSearch  bool `json:"autoWebSearch"`
-    Thinking       bool `json:"thinking"`
-    ImageGen       bool `json:"imageGen"`
-    PreviewMode    bool `json:"previewMode"`
-    PersistHistory bool `json:"persistHistory"`
+    WebSearch     bool `json:"webSearch"`
+    AutoWebSearch bool `json:"autoWebSearch"`
+    Thinking      bool `json:"thinking"`
+    ImageGen      bool `json:"imageGen"`
+    PreviewMode   bool `json:"previewMode"`
 }
 
 type Message struct {
@@ -170,20 +169,12 @@ type SessionState struct {
     Initializing bool
 }
 
-type ClientSession struct {
-    ChatID   string
-    Messages []Message
-    LastUsed time.Time
-}
-
-
 type ZAIResult struct {
     Chunk     string
     FullText  string
     Reasoning string
     Err       error
 }
-
 
 type SendOptions struct {
     Model             string
@@ -277,13 +268,6 @@ var session = &SessionState{
     FeVersion: DEFAULT_FE_VERSION,
     Features:  Features{Thinking: true}, // enable_thinking on by default
 }
-
-var (
-    sessions   = make(map[string]*ClientSession)
-    sessionsMu sync.Mutex
-)
-
-const SESSION_TTL = 30 * 60 * 1000 * time.Millisecond
 
 type ModelInfo struct {
     ID           string
@@ -443,22 +427,6 @@ func init() {
             baseSafeTable[i] = true
         }
     }
-
-    // Session cleanup ticker
-    go func() {
-        ticker := time.NewTicker(5 * time.Minute)
-        defer ticker.Stop()
-        for range ticker.C {
-            now := time.Now()
-            sessionsMu.Lock()
-            for id, s := range sessions {
-                if now.Sub(s.LastUsed) > SESSION_TTL {
-                    delete(sessions, id)
-                }
-            }
-            sessionsMu.Unlock()
-        }
-    }()
 }
 
 // ============================================================================
@@ -633,30 +601,6 @@ func messagesToPrompt(messages []Message) string {
 }
 
 func boolPtr(b bool) *bool { return &b }
-
-func getOrCreateSession(r *http.Request) *ClientSession {
-    sessionId := r.Header.Get("X-Session-Id")
-    if sessionId == "" {
-        sessionId = "default"
-    }
-    fresh := r.Header.Get("X-Fresh-Session") == "true"
-
-    sessionsMu.Lock()
-    defer sessionsMu.Unlock()
-
-    if fresh {
-        s := &ClientSession{ChatID: randomUUID(), LastUsed: time.Now()}
-        sessions[sessionId] = s
-        return s
-    }
-    if s, ok := sessions[sessionId]; ok {
-        s.LastUsed = time.Now()
-        return s
-    }
-    s := &ClientSession{ChatID: randomUUID(), LastUsed: time.Now()}
-    sessions[sessionId] = s
-    return s
-}
 
 // ============================================================================
 // URL ENCODING — custom lookup table, zero allocations for safe chars
@@ -2183,192 +2127,6 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 // ============================================================================
-// DASHBOARD HTML
-// ============================================================================
-
-func getDashboardHTML(host string) string {
-    html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Z.AI Direct Bridge</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #1e3a5f 0%, #0d1b2a 50%, #1b263b 100%);
-      min-height: 100vh; color: #e0e0e0; padding: 20px;
-    }
-    .container { max-width: 1200px; margin: 0 auto; }
-    .header {
-      text-align: center; padding: 40px 20px;
-      background: rgba(255,255,255,0.05); border-radius: 16px;
-      margin-bottom: 30px; border: 1px solid rgba(255,255,255,0.1);
-    }
-    .header h1 {
-      font-size: 2.5rem;
-      background: linear-gradient(135deg, #3b82f6, #1d4ed8, #60a5fa);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      margin-bottom: 10px;
-    }
-    .header p { color: #888; font-size: 1.1rem; }
-    .badges { display: flex; gap: 8px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
-    .badge {
-      display: inline-block; padding: 4px 12px; border-radius: 12px;
-      font-size: 0.8rem; font-weight: 700;
-    }
-    .badge-green { background: #22c55e; color: #000; }
-    .badge-blue  { background: #3b82f6; color: #fff; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-    .card {
-      background: rgba(255,255,255,0.05); border-radius: 12px;
-      padding: 24px; border: 1px solid rgba(255,255,255,0.1);
-    }
-    .card h2 { color: #60a5fa; margin-bottom: 16px; font-size: 1.2rem; }
-    .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-    .stat { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; }
-    .stat .label { color: #888; font-size: 0.85rem; }
-    .stat .value { color: #60a5fa; font-weight: 600; font-size: 1.5rem; margin-top: 4px; }
-    .code-block {
-      background: #0d1117; border-radius: 8px; padding: 16px; overflow-x: auto;
-      font-family: 'Monaco', 'Menlo', monospace; font-size: 0.85rem;
-      border: 1px solid #30363d; margin: 12px 0;
-    }
-    .code-block code { color: #c9d1d9; white-space: pre-wrap; }
-    .endpoint { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; margin-bottom: 8px; }
-    .method {
-      display: inline-block; padding: 4px 8px; border-radius: 4px;
-      font-size: 0.75rem; font-weight: 600; margin-right: 8px;
-    }
-    .method.get { background: #22c55e; color: #000; }
-    .method.post { background: #3b82f6; color: #fff; }
-    .path { font-family: monospace; color: #e0e0e0; }
-    .desc { color: #888; font-size: 0.85rem; margin-top: 4px; }
-    .section-label {
-      font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.1em; color: #a855f7; margin: 16px 0 8px;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>Z.AI Direct Bridge</h1>
-      <p>HTTP-only mode — No browser required</p>
-      <div class="badges">
-        <span class="badge badge-green">⚡ Direct Mode</span>
-        <span class="badge badge-blue">OpenAI Compatible</span>
-      </div>
-    </div>
-
-    <div class="grid">
-      <div class="card">
-        <h2>Session Status</h2>
-        <div class="stat-grid">
-          <div class="stat">
-            <div class="label">Connection</div>
-            <div class="value" id="sessionStatus">...</div>
-          </div>
-          <div class="stat">
-            <div class="label">User</div>
-            <div class="value" id="sessionUser" style="font-size:1rem">...</div>
-          </div>
-          <div class="stat">
-            <div class="label">Messages</div>
-            <div class="value" id="msgCount">0</div>
-          </div>
-          <div class="stat">
-            <div class="label">FE Version</div>
-            <div class="value" id="feVersion" style="font-size:0.85rem">...</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card">
-        <h2>Features</h2>
-        <div class="stat-grid">
-          <div class="stat"><div class="label">Web Search</div><div class="value" id="featSearch">-</div></div>
-          <div class="stat"><div class="label">Thinking</div><div class="value" id="featThink">-</div></div>
-          <div class="stat"><div class="label">Image Gen</div><div class="value" id="featImage">-</div></div>
-          <div class="stat"><div class="label">Preview</div><div class="value" id="featPreview">-</div></div>
-        </div>
-      </div>
-
-      <div class="card" style="grid-column: span 2;">
-        <h2>API Endpoints</h2>
-
-        <div class="section-label">OpenAI-Compatible</div>
-        <div class="endpoint">
-          <span class="method post">POST</span>
-          <span class="path">/v1/chat/completions</span>
-          <div class="desc">OpenAI-compatible chat endpoint. Supports streaming.</div>
-        </div>
-        <div class="endpoint">
-          <span class="method get">GET</span>
-          <span class="path">/v1/models</span>
-          <div class="desc">Model list</div>
-        </div>
-
-        <div class="section-label">Management</div>
-        <div class="endpoint">
-          <span class="method post">POST</span>
-          <span class="path">/features</span>
-          <div class="desc">Toggle webSearch, thinking, imageGen, previewMode, persistHistory</div>
-        </div>
-        <div class="endpoint">
-          <span class="method post">POST</span>
-          <span class="path">/admin/session/clear</span>
-          <div class="desc">Clear conversation history</div>
-        </div>
-      </div>
-
-      <div class="card" style="grid-column: span 2;">
-        <h2>Test the OpenAI endpoint</h2>
-        <div class="code-block">
-          <code># Non-streaming
-curl -X POST http://__HOST__/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer __TOKEN__" \
-  -d '{"model":"glm-5","messages":[{"role":"user","content":"Hello!"}],"stream":false}'
-
-# Streaming
-curl -X POST http://__HOST__/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer __TOKEN__" \
-  -d '{"model":"glm-5","stream":true,"messages":[{"role":"user","content":"Say hi"}]}'</code>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    async function updateStatus() {
-      try {
-        const res = await fetch('/status');
-        const d = await res.json();
-        document.getElementById('sessionStatus').textContent = d.connected ? '✓ OK' : '✗ Off';
-        document.getElementById('sessionUser').textContent = d.userName || '-';
-        document.getElementById('msgCount').textContent = d.messageCount || 0;
-        document.getElementById('feVersion').textContent = d.feVersion || '-';
-        document.getElementById('featSearch').textContent = d.features?.webSearch ? 'ON' : 'OFF';
-        document.getElementById('featThink').textContent = d.features?.thinking ? 'ON' : 'OFF';
-        document.getElementById('featImage').textContent = d.features?.imageGen ? 'ON' : 'OFF';
-        document.getElementById('featPreview').textContent = d.features?.previewMode ? 'ON' : 'OFF';
-      } catch(e) { console.error(e); }
-    }
-    updateStatus();
-    setInterval(updateStatus, 3000);
-  </script>
-</body>
-</html>`
-
-    html = strings.ReplaceAll(html, "__HOST__", host)
-    html = strings.ReplaceAll(html, "__TOKEN__", config.Auth.Token)
-    return html
-}
-
-// ============================================================================
 // MIDDLEWARE
 // ============================================================================
 
@@ -2376,7 +2134,7 @@ func corsMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         w.Header().Set("Access-Control-Allow-Origin", "*")
         w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-        w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-Id, X-Fresh-Session, Include-All-Features")
+        w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Include-All-Features")
         if r.Method == "OPTIONS" {
             w.WriteHeader(200)
             return
@@ -2428,12 +2186,7 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
         http.NotFound(w, r)
         return
     }
-    host := r.Host
-    if host == "" {
-        host = fmt.Sprintf("localhost:%d", config.Server.Port)
-    }
-    w.Header().Set("Content-Type", "text/html")
-    w.Write([]byte(getDashboardHTML(host)))
+    http.Redirect(w, r, "/health", http.StatusFound)
 }
 
 func statusHandler(w http.ResponseWriter, r *http.Request) {
@@ -2449,18 +2202,13 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
         userIDPreview = uid + "..."
     }
 
-    sessionsMu.Lock()
-    activeSessions := len(sessions)
-    sessionsMu.Unlock()
-
     writeJSON(w, 200, map[string]interface{}{
-        "connected":      session.Initialized,
-        "userName":       session.UserName,
-        "userId":         userIDPreview,
-        "feVersion":      session.FeVersion,
-        "activeSessions": activeSessions,
-        "features":       session.Features,
-        "mode":           "direct",
+        "connected": session.Initialized,
+        "userName":  session.UserName,
+        "userId":    userIDPreview,
+        "feVersion": session.FeVersion,
+        "features":  session.Features,
+        "mode":      "direct",
     })
 }
 
@@ -3088,7 +2836,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         stream = *body.Stream
     }
 
-    reqSession := getOrCreateSession(r)
+    chatID := randomUUID()
     requestId := generateID()
 
     // ── Agent mode: transform tools & roles for Z.AI compatibility ──
@@ -3116,8 +2864,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
     // Per-request overrides are only set if explicitly provided in the body.
     opts := SendOptions{
         Model:             model,
-        ChatID:            reqSession.ChatID,
-        Messages:          reqSession.Messages,
+        ChatID:            chatID,
         ClientMessagesRaw: transformedMessages,
         ReasoningEffort:   body.ReasoningEffort,
     }
@@ -3308,16 +3055,6 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         close(keepAliveStop)
         wg.Wait()
 
-        session.mu.Lock()
-        if session.Features.PersistHistory {
-            promptJSON, _ := json.Marshal(prompt)
-            reqSession.Messages = append(reqSession.Messages, Message{Role: "user", Content: json.RawMessage(promptJSON)})
-            if fullContent != "" {
-                contentJSON, _ := json.Marshal(fullContent)
-                reqSession.Messages = append(reqSession.Messages, Message{Role: "assistant", Content: json.RawMessage(contentJSON)})
-            }
-        }
-        session.mu.Unlock()
     } else {
         ch, err := sendToZAI(prompt, opts)
         if err != nil {
@@ -3345,22 +3082,11 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
             }
         }
 
-
         // Agent-mode: parse out tool-call blocks for non-stream response
         if config.AgentMode {
             toolCalls := extractAgentToolCalls(fullContent)
             if len(toolCalls) > 0 {
                 stripped := stripAgentToolCallBlocks(fullContent)
-                session.mu.Lock()
-                if session.Features.PersistHistory {
-                    promptJSON, _ := json.Marshal(prompt)
-                    reqSession.Messages = append(reqSession.Messages, Message{Role: "user", Content: json.RawMessage(promptJSON)})
-                    if fullContent != "" {
-                        contentJSON, _ := json.Marshal(fullContent)
-                        reqSession.Messages = append(reqSession.Messages, Message{Role: "assistant", Content: json.RawMessage(contentJSON)})
-                    }
-                }
-                session.mu.Unlock()
                 writeJSON(w, 200, map[string]interface{}{
                     "id":      "chatcmpl-" + requestId,
                     "object":  "chat.completion",
@@ -3392,17 +3118,6 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
                 return
             }
         }
-
-        session.mu.Lock()
-        if session.Features.PersistHistory {
-            promptJSON, _ := json.Marshal(prompt)
-            reqSession.Messages = append(reqSession.Messages, Message{Role: "user", Content: json.RawMessage(promptJSON)})
-            if fullContent != "" {
-                contentJSON, _ := json.Marshal(fullContent)
-                reqSession.Messages = append(reqSession.Messages, Message{Role: "assistant", Content: json.RawMessage(contentJSON)})
-            }
-        }
-        session.mu.Unlock()
 
         writeJSON(w, 200, formatOpenAIResponse(ResponseResult{Content: fullContent, Reasoning: fullReasoning}, model, requestId, false))
     }
@@ -3554,9 +3269,6 @@ func featuresHandler(w http.ResponseWriter, r *http.Request) {
     if v, ok := resolved["preview_mode"].(bool); ok {
         session.Features.PreviewMode = v
     }
-    if v, ok := overrides["persist_history"].(bool); ok {
-        session.Features.PersistHistory = v
-    }
     session.Features.ImageGen = false
     session.mu.Unlock()
 
@@ -3573,14 +3285,6 @@ func featuresHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func statsHandler(w http.ResponseWriter, r *http.Request) {
-    sessionsMu.Lock()
-    totalMessages := 0
-    for _, s := range sessions {
-        totalMessages += len(s.Messages)
-    }
-    activeSessions := len(sessions)
-    sessionsMu.Unlock()
-
     session.mu.Lock()
     initialized := session.Initialized
     session.mu.Unlock()
@@ -3591,11 +3295,10 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     writeJSON(w, 200, map[string]interface{}{
-        "mode":           "direct",
-        "totalClients":   totalClients,
-        "activeSessions": activeSessions,
+        "mode":         "direct",
+        "totalClients": totalClients,
         "stats": map[string]interface{}{
-            "totalRequests": totalMessages / 2,
+            "totalRequests": 0,
         },
     })
 }
@@ -3626,41 +3329,6 @@ func clientsHandler(w http.ResponseWriter, r *http.Request) {
         clients = []map[string]interface{}{}
     }
     writeJSON(w, 200, map[string]interface{}{"clients": clients})
-}
-
-func clearSessionHandler(w http.ResponseWriter, r *http.Request) {
-    sessionsMu.Lock()
-    sessions = make(map[string]*ClientSession)
-    sessionsMu.Unlock()
-    log.Println("[Session] All session histories cleared.")
-    writeJSON(w, 200, map[string]interface{}{
-        "success":        true,
-        "message":        "All session histories cleared",
-        "activeSessions": 0,
-    })
-}
-
-func clearClientHandler(w http.ResponseWriter, r *http.Request) {
-    if !checkAuth(r) {
-        w.Header().Set("Content-Type", "application/json")
-        w.WriteHeader(401)
-        json.NewEncoder(w).Encode(map[string]interface{}{
-            "type": "error",
-            "error": map[string]interface{}{
-                "type":    "authentication_error",
-                "message": "Invalid or missing authentication token",
-            },
-        })
-        return
-    }
-    if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/clear") {
-        sessionsMu.Lock()
-        sessions = make(map[string]*ClientSession)
-        sessionsMu.Unlock()
-        writeJSON(w, 200, map[string]interface{}{"success": true, "message": "History cleared"})
-        return
-    }
-    http.NotFound(w, r)
 }
 
 func injectHandler(w http.ResponseWriter, r *http.Request) {
@@ -3709,6 +3377,7 @@ func main() {
     mux := http.NewServeMux()
 
     mux.HandleFunc("/", dashboardHandler)
+    mux.HandleFunc("/health", healthHandler)
     mux.HandleFunc("/status", statusHandler)
     mux.HandleFunc("/v1/models", authMiddleware(modelsHandler))
     mux.HandleFunc("/models", authMiddleware(modelsHandler2))
@@ -3717,8 +3386,6 @@ func main() {
     mux.HandleFunc("/admin/stats", statsHandler)
     mux.HandleFunc("/admin/health", healthHandler)
     mux.HandleFunc("/admin/clients", clientsHandler)
-    mux.HandleFunc("/admin/session/clear", authMiddleware(clearSessionHandler))
-    mux.HandleFunc("/admin/clients/", clearClientHandler)
     mux.HandleFunc("/inject.js", injectHandler)
     mux.HandleFunc("/stop", authMiddleware(stopHandler))
 
@@ -3733,7 +3400,7 @@ func main() {
 ╠═══════════════════════════════════════════════════════════════╣
 ║  Mode:          DIRECT HTTP (no browser needed)               ║
 ║  Captcha IPC:   IN-MEMORY (no FIFO / named pipe)             ║
-║  Dashboard:     http://localhost:%d                      ║
+║  Health:        http://localhost:%d/health               ║
 ╠═══════════════════════════════════════════════════════════════╣
 ║  OpenAI API:    http://localhost:%d/v1/chat/completions  ║
 ╠═══════════════════════════════════════════════════════════════╣
