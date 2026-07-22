@@ -2007,8 +2007,9 @@ func streamSSEResponse(body io.Reader, ch chan<- ZAIResult) error {
                         current = current[:editIndex] + ec
                     } else {
                         // Z.AI index beyond current length — pad
-                        // Padding with spaces corrupts multi-byte tokens (like <<<END_TOOL_CALL>>>)
-                        // when Z.AI splits a token across delta_content and edit_content events.
+                        for len(current) < editIndex {
+                            current += " "
+                        }
                         current += ec
                     }
                 } else {
@@ -2712,13 +2713,15 @@ func (a *agentStreamInterceptor) feed(chunk string) (contentDelta string, toolCa
 // flushFinal emits any remaining buffered content (called at stream end).
 // Returns "" if we were mid-tool-call (incomplete — discarded).
 func (a *agentStreamInterceptor) flushFinal() string {
+    if a.emitting {
+        return ""
+    }
     data := a.buf.String()
     if a.flushed >= len(data) {
         return ""
     }
     rem := data[a.flushed:]
     a.flushed = len(data)
-    a.emitting = false // Prevent silent data loss if stream ends mid-tool-call
     return rem
 }
 
@@ -2989,16 +2992,25 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
                     writeSSE(toJSON(rChunk))
                     continue
                 }
+               // AFTER (correct split):
                 if result.FullText != "" {
-                    fullContent = result.FullText
-                } else {
-                    fullContent += result.Chunk
-                }
-                if len(fullContent) <= len(sentContent) {
-                    continue
-                }
-                delta := fullContent[len(sentContent):]
-                sentContent = fullContent
+					fullContent = result.FullText
+				} else {
+					fullContent += result.Chunk
+				}
+				// edit_content can rewind fullContent behind sentContent.
+				// Reset the interceptor so its buf/flushed stays in sync.
+				if interceptor != nil && len(fullContent) < len(sentContent) {
+					interceptor = newAgentStreamInterceptor()
+					sentContent = ""
+				}
+				if len(fullContent) <= len(sentContent) {
+					continue
+				}
+				delta := fullContent[len(sentContent):]
+				sentContent = fullContent
+                
+
 
                 if interceptor != nil {
                     contentDelta, toolCalls, _ := interceptor.feed(delta)
