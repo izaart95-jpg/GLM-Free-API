@@ -40,6 +40,7 @@ import (
     "sync"
     "sync/atomic"
     "time"
+    "unicode/utf8"
 
     _ "modernc.org/sqlite"
 )
@@ -2003,6 +2004,19 @@ func streamSSEResponse(body io.Reader, ch chan<- ZAIResult) error {
                 }
                 current := fullText.String()
                 if editIndex >= 0 {
+                    // Convert rune-based edit_index to byte offset
+                    byteIdx := 0
+                    runeCount := 0
+                    for byteIdx < len(current) {
+                        if runeCount == editIndex {
+                            break
+                        }
+                        _, size := utf8.DecodeRuneInString(current[byteIdx:])
+                        byteIdx += size
+                        runeCount++
+                    }
+                    editIndex = byteIdx
+
                     if editIndex <= len(current) {
                         current = current[:editIndex] + ec
                     } else {
@@ -2997,6 +3011,15 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
                 } else {
                     fullContent += result.Chunk
                 }
+                
+                // Detect content shrinkage (e.g., edit_content truncated the text)
+                if len(fullContent) < len(sentContent) {
+                    sentContent = ""
+                    if interceptor != nil {
+                        interceptor = newAgentStreamInterceptor()
+                    }
+                }
+                
                 if len(fullContent) <= len(sentContent) {
                     continue
                 }
@@ -3027,6 +3050,16 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
                     c := formatOpenAIResponse(ResponseResult{Content: rem}, model, requestId, true)
                     writeSSE(toJSON(c))
                 }
+                
+                // Safety net: fallback tool call extraction at stream end
+                if !toolCallEmitted {
+                    toolCalls := extractAgentToolCalls(fullContent)
+                    if len(toolCalls) > 0 {
+                        emitToolCallChunk(toolCalls)
+                        toolCallEmitted = true
+                    }
+                }
+
                 if toolCallEmitted {
                     finalChunk := map[string]interface{}{
                         "id":      "chatcmpl-" + requestId,
