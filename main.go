@@ -54,8 +54,7 @@ const (
     accessKey       = "LTAI5tSEBwYMwVKAQGpxmvTd"
     secretKey       = "YSKfst7GaVkXwZYvVihJsKF9r89koz"
     sceneID         = "didk33e0"
-    pipeName        = "captcha_pipe" // kept for reference; no longer used
-    maxTokenRetries = 2
+    maxTokenRetries = 5
 
     // Z.AI direct config
     BASE_URL           = "https://chat.z.ai"
