@@ -285,16 +285,54 @@ func sendToZAI(prompt string, opts SendOptions) (<-chan ZAIResult, error) {
     // (server defaults + stored user overrides)
     featuresMap := resolveFeaturesForModel(model)
 
-    // Apply per-request overrides (highest precedence)
+    // Apply per-request overrides (highest precedence).
+    //
+    // Issue #42: Z.AI's completions payload has TWO search-related feature
+    // keys, but only one of them does anything:
+    //   - auto_web_search — the real toggle for the model's built-in
+    //     WebSearch feature (the globe icon on chat.z.ai)
+    //   - web_search      — always false upstream; sending true here does
+    //     NOT enable anything (it's just mirrored back by the server)
+    // So the webSearch request flag now toggles auto_web_search only, and
+    // web_search is pinned to false in every request (see the payload
+    // build in sendToZAIStream). "Advanced Search" on chat.z.ai is a
+    // different thing entirely — it's an MCP server, opted into per
+    // request via the top-level "mcp_servers": ["advanced-search"] field
+    // (see SendOptions.AdvancedSearch).
+    webSearch := false
+    advancedSearch := false
     if opts.WebSearch != nil {
-        if *opts.WebSearch {
-            featuresMap["auto_web_search"] = true
-            featuresMap["web_search"] = true
-        } else {
-            delete(featuresMap, "auto_web_search")
-            delete(featuresMap, "web_search")
-        }
+        webSearch = *opts.WebSearch
     }
+    if opts.AdvancedSearch != nil {
+        advancedSearch = *opts.AdvancedSearch
+    }
+    if config.AgentMode {
+        // Issue #42 gate: agent mode folds tools & roles into a single
+        // user-only prompt. Z.AI serves the built-in WebSearch through an
+        // internal tool-call loop on its side; mixing that with the agent
+        // shim's own tool contract confuses the model (it starts emitting
+        // internal tool_call markers like retrieve/open_url as if they were
+        // the caller's tools, or refuses to search at all). So: agent mode
+        // always wins and web search stays off, even when the request
+        // asked for it.
+        if webSearch || advancedSearch {
+            logInfo("[web_search] agent mode active — disabling web search for this request")
+        }
+        webSearch = false
+        advancedSearch = false
+    }
+    if webSearch {
+        featuresMap["auto_web_search"] = true
+    } else if opts.WebSearch != nil || config.AgentMode {
+        // Only strip auto_web_search when the request explicitly turned it
+        // off, or when the agent-mode gate forces it off — otherwise the
+        // stored per-model overrides (POST /features) keep working.
+        delete(featuresMap, "auto_web_search")
+    }
+    // web_search is never set to true upstream — auto_web_search is the
+    // only working toggle (issue #42). The payload build pins it to false.
+    delete(featuresMap, "web_search")
     if opts.Thinking != nil {
         featuresMap["enable_thinking"] = *opts.Thinking
     }
@@ -359,6 +397,7 @@ func sendToZAI(prompt string, opts SendOptions) (<-chan ZAIResult, error) {
         ClientMessagesRaw json.RawMessage
         Files             []map[string]interface{}
         RequestID         string
+        AdvancedSearch    bool
     }{
         Model:             model,
         ChatID:            chatID,
@@ -367,6 +406,7 @@ func sendToZAI(prompt string, opts SendOptions) (<-chan ZAIResult, error) {
         ClientMessagesRaw: opts.ClientMessagesRaw,
         Files:             opts.Files,
         RequestID:         opts.RequestID,
+        AdvancedSearch:    advancedSearch,
     }
 
     ch := make(chan ZAIResult, 100)
@@ -387,6 +427,7 @@ func sendToZAIStream(prompt string, opts struct {
     ClientMessagesRaw json.RawMessage
     Files             []map[string]interface{}
     RequestID         string
+    AdvancedSearch    bool
 }, ch chan<- ZAIResult) error {
 
     for attempt := 0; attempt < 2; attempt++ {
@@ -440,6 +481,9 @@ func sendToZAIStream(prompt string, opts struct {
         featuresPayload["flags"] = []interface{}{}
         // image_generation is ALWAYS false
         featuresPayload["image_generation"] = false
+        // web_search is always false — auto_web_search is the only working
+        // web-search toggle upstream (issue #42).
+        featuresPayload["web_search"] = false
 
         requestBody := map[string]interface{}{
             "model":                opts.Model,
@@ -454,6 +498,18 @@ func sendToZAIStream(prompt string, opts struct {
         // requests keep the exact body shape they always had.
         if len(opts.Files) > 0 {
             requestBody["files"] = opts.Files
+        }
+        // Issue #42: "Advanced Search" on chat.z.ai is an MCP server. When
+        // enabled in the web UI, the frontend adds a top-level
+        // "mcp_servers": ["advanced-search"] field to the completions
+        // payload (same level as captcha_verify_param), and the model then
+        // runs its searches through the advanced-search MCP tools
+        // (internal tool calls like retrieve/open_url show up in the SSE
+        // stream, answered server-side by Z.AI). Only attach the field when
+        // it's on — a plain web-search request keeps the exact body shape
+        // the web client sends.
+        if opts.AdvancedSearch {
+            requestBody["mcp_servers"] = []string{"advanced-search"}
         }
 
         bodyBytes, _ := json.Marshal(requestBody)

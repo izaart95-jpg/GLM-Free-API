@@ -27,6 +27,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         Thinking        json.RawMessage `json:"thinking"`
         WebSearch       *bool           `json:"webSearch"`
         Search          *bool           `json:"search"`
+        AdvancedSearch  *bool           `json:"advancedSearch"`
         Tools           json.RawMessage `json:"tools"`
         ToolChoice      json.RawMessage `json:"tool_choice"`
         ReasoningEffort string          `json:"reasoning_effort"`
@@ -151,6 +152,18 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         opts.WebSearch = body.WebSearch
     } else if body.Search != nil {
         opts.WebSearch = body.Search
+    }
+    // Advanced Search (the MCP "advanced-search" server from chat.z.ai)
+    // rides on top of web search — turn the base toggle on with it, exactly
+    // like the web UI does (Advanced Search is only reachable when the
+    // globe/web-search mode is on). The agent-mode gate in sendToZAI still
+    // force-disables both when agent mode is active.
+    if body.AdvancedSearch != nil {
+        opts.AdvancedSearch = body.AdvancedSearch
+        if *body.AdvancedSearch && opts.WebSearch == nil {
+            on := true
+            opts.WebSearch = &on
+        }
     }
 
     if stream {

@@ -35,6 +35,8 @@ func OverrideSessionState(token, userID string, initialized bool) func() {
 // SeedCaptchaParam pushes a ready-made captcha_verify_param into the
 // agent-mode cache so requests can bypass the Aliyun captcha machinery
 // (integration tests only — the live cache is fed by captchaCache.Run).
+// Only serves requests that run with agent mode on: the cache path in
+// getCaptchaVerifyParam is agent-mode only.
 func SeedCaptchaParam(value string) {
     captchaCache.mu.Lock()
     captchaCache.params = append(captchaCache.params, cachedCaptcha{
@@ -42,6 +44,17 @@ func SeedCaptchaParam(value string) {
         generatedAt: time.Now(),
     })
     captchaCache.mu.Unlock()
+}
+
+// OverrideCaptchaParam makes getCaptchaVerifyParam return the given value
+// unconditionally (no Aliyun call, no cache), regardless of agent mode —
+// the blackbox equivalent of the whitebox captchaParamOverride seam. The
+// returned function restores the previous state. Integration tests use it
+// to drive the non-agent request path against a mock upstream.
+func OverrideCaptchaParam(value string) func() {
+    prev := captchaParamOverride
+    captchaParamOverride = value
+    return func() { captchaParamOverride = prev }
 }
 
 // FlushModelsCache clears the cached model list so the next /v1/models (or

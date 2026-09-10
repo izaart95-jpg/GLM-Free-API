@@ -182,7 +182,8 @@ Anthropic clients authenticate via `x-api-key` (same value as `AUTH_TOKEN`); `an
 | `thinking` | object | *(per-model)* | `{"type":"enabled"}` / `{"type":"disabled"}` → `enable_thinking` |
 | `reasoning_effort` | string | *(empty)* | `"high"`/`"max"` — forwarded only if the model supports it; forces `enable_thinking=true` |
 | `tools` | array | *(empty)* | OpenAI-style tools (requires agent mode) |
-| `webSearch` / `search` | bool | *(per-model)* | Toggle `auto_web_search` + `web_search` |
+| `webSearch` / `search` | bool | *(per-model)* | Toggle the WebSearch feature (sets `auto_web_search` in the upstream `features` payload) |
+| `advancedSearch` | bool | `false` | **Advanced Search** (chat.z.ai's MCP variant of web search) — adds `"mcp_servers":["advanced-search"]` to the upstream completions payload; implies `webSearch=true` |
 
 #### Image input (vision)
 
@@ -350,6 +351,35 @@ Enabling agent mode also starts the background captcha cache (2 pre-generated pa
 
 ---
 
+## Web Search & Advanced Search (issue #42)
+
+Two separate things live behind the globe icon on chat.z.ai, and the bridge now maps both onto request flags:
+
+**WebSearch** (`webSearch: true`, or the `search` alias) — the model's built-in search mode. Internally this sets **`auto_web_search: true`** in the upstream `features` payload. That is the only key that actually toggles the feature: the sibling `web_search` key is **always `false` upstream** — sending `true` there does nothing (the server just mirrors it back), which is why a request that "looked" enabled could silently do nothing. The bridge now always pins `features.web_search = false` and never sends `true` for it, no matter what stored overrides say.
+
+**Advanced Search** (`advancedSearch: true`) — not a feature flag at all, but an **MCP server**. On the real chat.z.ai web, toggling Advanced Search makes the frontend add a new top-level field to the completions request payload:
+
+```json
+{
+  "model": "glm-5.3",
+  "chat_id": "...",
+  "messages": [...],
+  "captcha_verify_param": "...",
+  "mcp_servers": ["advanced-search"],
+  "features": { "auto_web_search": true, ... }
+}
+```
+
+`mcp_servers` sits on the same payload level as `captcha_verify_param` (it is *not* inside `features`). When it's present, Z.AI runs the model's searches through the advanced-search MCP tools — the internal `tool_call` events (`retrieve`, `open_url`, …) you see fly by in the SSE stream are that loop at work; they're answered server-side by Z.AI itself and have nothing to do with agent-mode tool calling.
+
+The bridge reproduces this exactly: `advancedSearch: true` adds `"mcp_servers": ["advanced-search"]` to the upstream payload and auto-enables the base web-search toggle (same coupling as the web UI, where Advanced Search hides behind the globe). Citations come back inline as `【turn0search0】` markers in the message text plus `[ref_id=...]` blocks the model quotes from — the `metadata.browser.search_result` on the internal tool responses carries the full source list (title, url, snippet, favicon) for anyone who wants to build a references panel.
+
+**Agent-mode gate** — when agent mode is on, both search toggles are **force-disabled server-side**, even if the request asks for them. Z.AI serves WebSearch through its own internal tool-call loop; mixing that with the agent shim's tool contract makes the model emit internal markers (`retrieve`, `open_url`) as if they were the caller's tools, or refuse to search at all. The request still succeeds — it just runs without server-side search. If you need both, run tool-calling requests without the search flags and let the client's own tools fetch pages.
+
+Both flags are also accepted on the Anthropic `/v1/messages` endpoint (`webSearch`, `search`, `advancedSearch` in the body) and map to the same upstream payload.
+
+---
+
 ## Examples
 
 > Self-hosted examples use `glm-4.7` so they work **without** `ZAI_TOKEN`. For the hosted instance use base URL `https://glm.cognix.sryze.cc/v1`, model `glm-5.2` or `glm-5.3-flash`, same auth.
@@ -455,12 +485,15 @@ zai-api/
 │   ├── agent_test.go              # Whitebox: modern agent shim
 │   ├── db_test.go                 # Whitebox: DB holder, count TTL, graceful swap
 │   ├── sse_garble_test.go         # Whitebox: SSE parser (issue #23)
+│   ├── websearch_test.go          # Whitebox: search payload shapes + agent gate (issue #42)
 │   └── vision_test.go             # Whitebox: url->file-id rewrite
 ├── cmd/token-collector/           # Standalone binary: seeds tokens.sqlite (TUI)
 ├── tests/                         # Blackbox tests (package tests)
 │   ├── session_pool_test.go       # Pool mechanics, chat-delete client, GC wiring
 │   ├── integration_test.go        # E2E HTTP garble regression (issue #23)
+│   ├── toolcall_stream_test.go    # E2E streamed tool calls (agent mode)
 │   ├── db_hotswap_test.go         # E2E /health tokenCount + /sqlite hot-swap
+│   ├── websearch_e2e_test.go      # E2E search flags -> upstream payload (issue #42)
 │   └── vision_test.go             # Vision e2e (upload + files), /v1/models, limits
 └── README.md
 ```

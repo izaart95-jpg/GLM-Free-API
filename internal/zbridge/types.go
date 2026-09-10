@@ -51,6 +51,13 @@ type ZAIResult struct {
 type SendOptions struct {
     Model             string
     WebSearch         *bool
+    // AdvancedSearch enables Z.AI's "Advanced Search" (the MCP variant of
+    // web search from chat.z.ai): it attaches the top-level
+    // "mcp_servers": ["advanced-search"] field to the upstream
+    // /api/v2/chat/completions payload. Requires WebSearch to be on too —
+    // the web UI only exposes Advanced Search behind the globe icon.
+    // Ignored (forced off) when agent mode is active (issue #42).
+    AdvancedSearch    *bool
     Thinking          *bool
     ImageGen          *bool
     PreviewMode       *bool
