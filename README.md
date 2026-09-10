@@ -131,7 +131,7 @@ On startup a banner shows the health URL, endpoints, and auth token. The Z.AI se
 | `SYNC_MODE` | `false` | Legacy synchronous session flow (no pre-warmed pool) |
 | `SESSION_POOL_SIZE` | `5` | Standing batch of ready chat sessions |
 | `SESSION_ACQUIRE_TIMEOUT` | `10` | Seconds to wait for a pooled session before creating one directly (`0` = wait forever) |
-| `UPSTREAM_MIN_INTERVAL_MS` | *(random 200–500)* | Minimum gap between consecutive requests to Z.AI / Aliyun — paces bursts so the Aliyun WAF doesn't block the egress IP (issue #20). Default is drawn randomly in `[200, 500]` ms per transport (a fixed gap is a fingerprint); `0` disables pacing |
+| `UPSTREAM_MIN_INTERVAL_MS` | *(random 200–500)* | Minimum gap between consecutive requests to Z.AI / Aliyun — paces bursts so the Aliyun WAF doesn't block the egress IP (issue #20). The gap is enforced by **one shared gate across all upstream transports** (Z.AI + Aliyun captcha), so alternating calls between the two cannot collapse the real inter-request gap to zero (issue #41). Default is drawn randomly in `[200, 500]` ms per transport (a fixed gap is a fingerprint); `0` disables pacing |
 | `TOKEN_COUNT_TTL_MS` | `5000` | How long the `/health` token count stays cached before the next probe re-queries the active database (`TOKEN_COUNT_TTL_MS <= 0` keeps the default) |
 
 ---
@@ -249,6 +249,30 @@ The health response includes the number of device tokens left in the active `tok
 - The count is served from a small TTL cache (`TOKEN_COUNT_TTL_MS`, default **5000** ms) so frequent health probes don't turn into per-probe `SELECT COUNT(*)` queries.
 - `-1` means "unknown": no database attached, or the count query failed (e.g. the file vanished).
 - Swapping the database (`POST /sqlite`) invalidates the cache immediately — the next probe reflects the new file, not a stale value.
+
+## WAF Circuit Breaker (issue #41)
+
+Sustained agent traffic can trip the Aliyun WAF in front of chat.z.ai: the **egress IP** gets served the block page on `POST /api/v2/chat/completions` even though `GET /` and `GET /api/models` keep working. The block is IP-wide (a real browser on the same IP fails identically) and outlives any single request.
+
+The bridge now handles this end-to-end:
+
+- **Shared pacing gate** — every upstream transport (Z.AI client + Aliyun captcha client) funnels through *one* process-wide slot allocator, so the minimum gap between consecutive upstream requests holds no matter which transport fires. Previously each transport paced independently, and interleaved captcha/completion/delete calls could collapse the real gap to zero.
+- **Block detection** — the block page (405/403 + the Aliyun marker HTML) is recognized and distinguished from genuine Z.AI JSON errors.
+- **Fail fast** — while the breaker is open, requests are rejected with `503` + `Retry-After` **before** a pooled session is drawn, before vision upload, and above all **before a captcha burns a harvested device token**. Chat deletions are skipped too, so a block no longer generates pointless upstream traffic that keeps it alive.
+- **Background recovery** — a prober re-checks the blocked endpoint after each cooldown, **doubling the backoff** (60 s → 30 min cap) while the block persists, and resumes traffic automatically the moment it lifts. The probe deliberately targets `POST /api/v2/chat/completions` (bare, unauthenticated, no captcha) — the endpoint the WAF actually blocks — not a path that stays open during a block.
+- **Clean client errors** — clients receive a small structured JSON error (`{"type":"overloaded_error","code":"waf_block","retryIn":"35s"}`) with a `Retry-After` header, never the raw 3 KB HTML page:
+
+```json
+{ "error": { "type": "overloaded_error", "code": "waf_block",
+    "message": "chat.z.ai has temporarily blocked this server's IP (Aliyun WAF). ...",
+    "retryIn": "35s" } }
+```
+
+`GET /status` exposes live breaker state:
+
+```json
+"waf": { "blocked": true, "state": 1, "retryIn": "43s", "consecutiveBlocks": 3 }
+```
 
 ## `/sqlite` — Hot-Swap the Token Database
 
@@ -424,6 +448,9 @@ zai-api/
 │   ├── agent.go                   # Modern agent shim (XML-sectioned prompt)
 │   ├── agent_legacy.go            # Legacy [ROLE: ...] shim
 │   ├── session_pool.go            # Throwaway sessions + async pool + GC
+│   ├── ratelimit.go               # Shared upstream pacing gate (issues #20, #41)
+│   ├── waf.go                     # Aliyun WAF circuit breaker (issue #41)
+│   ├── waf_test.go                # Whitebox: breaker state machine + probe
 │   ├── testhooks.go               # Exported seams for tests/
 │   ├── agent_test.go              # Whitebox: modern agent shim
 │   ├── db_test.go                 # Whitebox: DB holder, count TTL, graceful swap

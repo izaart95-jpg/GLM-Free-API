@@ -367,6 +367,12 @@ func anthropicMessagesHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+    // Issue #41: fail fast while the Aliyun WAF blocks this server's egress
+    // IP — before a pooled session, before vision upload, before captcha.
+    if RejectIfWAFBlocked(w) {
+        return
+    }
+
     // ── Vision: extract image_url parts (converted from Anthropic image ──
     // blocks), upload them to Z.AI, and strip them from the messages.
     // cleanedMessages is byte-identical to body.Messages when no images.

@@ -390,6 +390,18 @@ func sendToZAIStream(prompt string, opts struct {
 }, ch chan<- ZAIResult) error {
 
     for attempt := 0; attempt < 2; attempt++ {
+        // Issue #41: while the breaker believes the egress IP is blocked by
+        // the Aliyun WAF, do not spend a captcha (each costs a harvested
+        // device token and ~10-15 s of signing) on a request that is
+        // guaranteed to be answered with the block page. The handler-level
+        // gate (RejectIfWAFBlocked) already rejects most requests before
+        // this point; this second check catches requests that were already
+        // in flight when the block was detected. A background prober
+        // re-checks the block and reopens traffic automatically.
+        if err, _ := CheckWAF(); err != nil {
+            return err
+        }
+
         session.mu.Lock()
         token := session.Token
         userID := session.UserID
@@ -510,12 +522,26 @@ func sendToZAIStream(prompt string, opts struct {
             if config.Logging.Level == "debug" {
                 log.Println("[DEBUG] Z.AI error body:", string(errBody))
             }
-            return fmt.Errorf("Z.AI error %d: %s", resp.StatusCode, string(errBody))
+            // Issue #41: the Aliyun WAF block page comes back as 405 with
+            // the block HTML. Detect it, trip the breaker, and surface a
+            // short actionable error instead of the raw 3 KB page.
+            if isWAFBlockResponse(resp.StatusCode, errBody) {
+                RecordWAFBlock()
+                return fmt.Errorf("%w (retry in ~%s)", ErrWAFBlock, wafRetryHint().Round(time.Second))
+            }
+            RecordWAFSuccess() // a real API error proves the IP is not blocked
+            return fmt.Errorf("Z.AI error %d: %s", resp.StatusCode, truncateErrorBody(errBody))
         }
 
         err = streamSSEResponse(resp.Body, ch, opts.RequestID)
         resp.Body.Close()
         cancel()
+        if err == nil {
+            // A healthy SSE stream is the strongest proof the IP is not
+            // blocked; keep the breaker closed even if it was left open by
+            // a stale observation.
+            RecordWAFSuccess()
+        }
         return err
     }
     return errors.New("Max retries exceeded")
@@ -577,6 +603,10 @@ func extractZAIError(j map[string]interface{}) string {
 // statusFromError maps a Z.AI/bridge error string to an HTTP status code.
 func statusFromError(errMsg string) int {
     switch {
+    case strings.Contains(errMsg, "temporarily blocked this server's IP"):
+        // Issue #41: IP-level WAF block — not the client's request shape.
+        // 503 (retry later), not 500.
+        return 503
     case strings.Contains(errMsg, "401"):
         return 401
     case strings.Contains(errMsg, "403"):

@@ -36,6 +36,12 @@ func (r *recordingTransport) gaps() []time.Duration {
     return out
 }
 
+func (r *recordingTransport) snapshot() []time.Time {
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    return append([]time.Time{}, r.times...)
+}
+
 func TestPacedTransportSpacesSequentialRequests(t *testing.T) {
     rec := &recordingTransport{}
     const gap = 40 * time.Millisecond
@@ -167,7 +173,7 @@ func TestUpstreamMinIntervalFromEnv(t *testing.T) {
 // pacedWithGap builds a transport with a fixed interval, bypassing the
 // environment lookup.
 func pacedWithGap(base http.RoundTripper, gap time.Duration) http.RoundTripper {
-    return &pacedTransport{base: base, gapFor: func() time.Duration { return gap }}
+    return &pacedTransport{base: base, gate: &pacingGate{gapFor: func() time.Duration { return gap }}}
 }
 
 // The default draw must be crypto-random in [200ms, 500ms]. This cannot assert
@@ -187,5 +193,55 @@ func TestUpstreamIntervalRandomDraw(t *testing.T) {
     }
     if len(seen) < 2 {
         t.Fatalf("all %d draws identical — the interval is not random", len(seen))
+    }
+}
+
+// Issue #41: with per-transport pacing, alternating calls between the Z.AI
+// client and the Aliyun captcha client each consumed a slot from their OWN
+// transport's clock, so the real gap between consecutive upstream requests
+// collapsed toward zero even though both transports were individually paced.
+// The shared gate must keep the minimum gap across transports.
+func TestSharedGatePacesAcrossTransports(t *testing.T) {
+    const gap = 30 * time.Millisecond
+    zaiRec := &recordingTransport{}
+    aliRec := &recordingTransport{}
+    // Both transports deliberately share ONE gate, as production does.
+    gate := &pacingGate{gapFor: func() time.Duration { return gap }}
+    zaiRT := &pacedTransport{base: zaiRec, gate: gate}
+    aliRT := &pacedTransport{base: aliRec, gate: gate}
+
+    // Interleave exactly like the real request flow does: captcha call
+    // (Aliyun), completion POST (Z.AI), chat delete (Z.AI), pool refill...
+    for i := 0; i < 6; i++ {
+        req := httptest.NewRequest("GET", "https://example.invalid/", nil)
+        if _, err := aliRT.RoundTrip(req); err != nil {
+            t.Fatalf("aliyun call %d: %v", i, err)
+        }
+        if _, err := zaiRT.RoundTrip(req); err != nil {
+            t.Fatalf("zai call %d: %v", i, err)
+        }
+    }
+
+    // Merge the recorded timestamps from BOTH transports and assert that the
+    // minimum gap between any two consecutive upstream requests respects the
+    // configured floor.
+    all := append(append([]time.Time{}, zaiRec.snapshot()...), aliRec.snapshot()...)
+    if len(all) != 12 {
+        t.Fatalf("want 12 upstream calls, got %d", len(all))
+    }
+    sortTimes(all)
+    for i := 1; i < len(all); i++ {
+        got := all[i].Sub(all[i-1])
+        if got < gap-8*time.Millisecond {
+            t.Fatalf("cross-transport gap %d collapsed: %v, want >= %v (per-transport clocks interleaved)", i, got, gap)
+        }
+    }
+}
+
+func sortTimes(ts []time.Time) {
+    for i := 1; i < len(ts); i++ {
+        for j := i; j > 0 && ts[j].Before(ts[j-1]); j-- {
+            ts[j], ts[j-1] = ts[j-1], ts[j]
+        }
     }
 }

@@ -153,9 +153,22 @@ func (zaiSessionBackend) DeleteChatSession(ctx context.Context, sessionIDs ...st
 //
 // Deletion is idempotent: an "already gone" reply is treated as success so
 // the GC never gets stuck on a chat that was collected twice.
+//
+// Issue #41: while the WAF breaker is open (IP blocked), the DELETE would be
+// answered with the block page too — a wasted upstream call per retired
+// session that also keeps the block alive. Deletion is skipped instead: the
+// chats are throwaway UUIDs that only materialize server-side when a
+// completion references them, so a chat whose delete was skipped during a
+// block is at worst a short-lived leftover that a later GC pass retires
+// through the idempotent 404 "already gone" path.
 func DeleteZAIChat(ctx context.Context, chatID string) error {
     if chatID == "" {
         return nil
+    }
+
+    // Issue #41: do not poke the blocked edge while the breaker is open.
+    if err, _ := CheckWAF(); err != nil {
+        return fmt.Errorf("chat delete skipped: %s", err.Error())
     }
 
     for attempt := 0; attempt < 2; attempt++ {

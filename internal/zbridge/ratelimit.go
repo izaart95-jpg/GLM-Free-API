@@ -17,12 +17,20 @@ import (
 // the session pool refills in the background on top of that. Bursts therefore
 // hit chat.z.ai far harder than the request count suggests, and Aliyun's WAF
 // answers a burst by blocking the source IP: every later request comes back as
-// the 405 block page, for hours, no matter which account or session is used.
+// the 405 block page, for hours, no matter which account or session is used
+// (issues #20, #41).
 //
-// Pacing every upstream call through one shared gate keeps a burst from ever
+// Pacing every upstream call through ONE SHARED gate keeps a burst from ever
 // forming. It is deliberately a floor on the gap between requests rather than
 // a token bucket: a bucket lets a burst through as long as the average holds,
 // which is exactly the shape that trips the WAF.
+//
+// The gate is shared across all upstream transports (the Z.AI client and the
+// Aliyun captcha client). Issue #41 showed why: per-transport gates each keep
+// their own "next slot" clock, so alternating calls between two transports
+// interleave their slots and the real gap between consecutive upstream
+// requests collapses toward zero even when each transport is individually
+// paced — sustained agent traffic interleaves exactly this way.
 //
 // UPSTREAM_MIN_INTERVAL_MS pins the interval explicitly; 0 disables pacing
 // entirely. Unset, the interval is drawn once per transport from a
@@ -58,16 +66,11 @@ func upstreamMinInterval() time.Duration {
     return time.Duration(ms) * time.Millisecond
 }
 
-// pacedTransport spaces out the requests handed to base. Callers block in
-// RoundTrip until their slot is due, so pacing applies no matter which code
-// path issues the call.
-type pacedTransport struct {
-    base http.RoundTripper
-
-    // The interval is resolved on first use, not at package init: these
-    // transports are package-level variables, so reading the environment in
-    // the constructor would freeze the value before main (or TestMain) has
-    // had a chance to set it.
+// pacingGate is the process-wide slot allocator every upstream transport
+// funnels through. A single mutex-protected "next allowed start" makes the
+// minimum gap hold across ALL concurrent upstream calls, no matter which
+// transport issues them.
+type pacingGate struct {
     gapOnce sync.Once
     gap     time.Duration
     gapFor  func() time.Duration
@@ -76,40 +79,55 @@ type pacedTransport struct {
     next time.Time // earliest instant the next request may start
 }
 
-// newPacedTransport wraps base with the interval from the environment.
-func newPacedTransport(base http.RoundTripper) http.RoundTripper {
-    return &pacedTransport{base: base, gapFor: upstreamMinInterval}
-}
+// sharedPacingGate is the one gate all upstream transports share.
+var sharedPacingGate = &pacingGate{gapFor: upstreamMinInterval}
 
-func (t *pacedTransport) minGap() time.Duration {
-    t.gapOnce.Do(func() {
-        gapFor := t.gapFor
+func (g *pacingGate) minGap() time.Duration {
+    g.gapOnce.Do(func() {
+        gapFor := g.gapFor
         if gapFor == nil {
             gapFor = upstreamMinInterval
         }
-        t.gap = gapFor()
+        g.gap = gapFor()
     })
-    return t.gap
+    return g.gap
 }
 
-func (t *pacedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-    minGap := t.minGap()
+// claim reserves the next start slot and reports how long the caller must
+// wait before issuing its request.
+func (g *pacingGate) claim() time.Duration {
+    minGap := g.minGap()
     if minGap <= 0 {
-        return t.base.RoundTrip(req) // pacing disabled
+        return 0
     }
-
-    // Claim a slot: concurrent callers queue up rather than all waiting for
-    // the same instant and then firing together.
-    t.mu.Lock()
+    g.mu.Lock()
     now := time.Now()
-    slot := t.next
+    slot := g.next
     if slot.Before(now) {
         slot = now
     }
-    t.next = slot.Add(minGap)
-    t.mu.Unlock()
+    g.next = slot.Add(minGap)
+    g.mu.Unlock()
+    return time.Until(slot)
+}
 
-    if wait := time.Until(slot); wait > 0 {
+// pacedTransport spaces out the requests handed to base through the shared
+// pacing gate. Callers block in RoundTrip until their slot is due, so pacing
+// applies no matter which code path issues the call — and, because every
+// upstream transport wraps itself with the SAME gate, no matter which
+// transport fires either.
+type pacedTransport struct {
+    base http.RoundTripper
+    gate *pacingGate
+}
+
+// newPacedTransport wraps base with the shared pacing gate.
+func newPacedTransport(base http.RoundTripper) http.RoundTripper {
+    return &pacedTransport{base: base, gate: sharedPacingGate}
+}
+
+func (t *pacedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+    if wait := t.gate.claim(); wait > 0 {
         timer := time.NewTimer(wait)
         defer timer.Stop()
         select {

@@ -52,6 +52,13 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+    // Issue #41: fail fast while the Aliyun WAF blocks this server's
+    // egress IP — before a pooled session is drawn, before vision upload,
+    // and before a captcha burns a harvested device token.
+    if RejectIfWAFBlocked(w) {
+        return
+    }
+
     // ── Vision: extract image_url parts, upload them to Z.AI, strip them ──
     // from the messages. cleanedMessages is byte-identical to body.Messages
     // when the request carries no images (the common case).

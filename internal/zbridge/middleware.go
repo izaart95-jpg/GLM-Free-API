@@ -105,6 +105,7 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
         "features":    session.Features,
         "mode":        "direct",
         "sessionPool": sessionPoolStatus(),
+        "waf":         WAFStatus(),
     })
 }
 
