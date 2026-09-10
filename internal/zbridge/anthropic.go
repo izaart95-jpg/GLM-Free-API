@@ -300,6 +300,19 @@ func anthropicToOpenAIRequest(bodyBytes []byte) ([]byte, error) {
         }
     }
 
+    // Convert the web-search toggles (non-standard Anthropic extensions
+    // this bridge accepts): webSearch/search -> webSearch, advancedSearch
+    // -> advancedSearch. The sendToZAI pipeline treats them the same as
+    // the OpenAI endpoint's flags (issue #42).
+    if ws, ok := req["webSearch"].(bool); ok {
+        out["webSearch"] = ws
+    } else if s, ok := req["search"].(bool); ok {
+        out["webSearch"] = s
+    }
+    if as, ok := req["advancedSearch"].(bool); ok {
+        out["advancedSearch"] = as
+    }
+
     return json.Marshal(out)
 }
 
@@ -342,6 +355,8 @@ func anthropicMessagesHandler(w http.ResponseWriter, r *http.Request) {
         Stream          *bool           `json:"stream"`
         Reasoning       *bool           `json:"reasoning"`
         Thinking        json.RawMessage `json:"thinking"`
+        WebSearch       *bool           `json:"webSearch"`
+        AdvancedSearch  *bool           `json:"advancedSearch"`
         Tools           json.RawMessage `json:"tools"`
         ReasoningEffort string          `json:"reasoning_effort"`
     }
@@ -433,6 +448,20 @@ func anthropicMessagesHandler(w http.ResponseWriter, r *http.Request) {
     } else if len(body.Thinking) > 0 {
         enabled := thinkingEnabled(body.Thinking)
         opts.Thinking = &enabled
+    }
+
+    if body.WebSearch != nil {
+        opts.WebSearch = body.WebSearch
+    }
+    // Advanced Search implies web search (same coupling as the OpenAI
+    // endpoint — Advanced Search is only reachable behind the web-search
+    // toggle on chat.z.ai). The agent-mode gate in sendToZAI still wins.
+    if body.AdvancedSearch != nil {
+        opts.AdvancedSearch = body.AdvancedSearch
+        if *body.AdvancedSearch && opts.WebSearch == nil {
+            on := true
+            opts.WebSearch = &on
+        }
     }
 
     if stream {

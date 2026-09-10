@@ -595,7 +595,17 @@ func (c *CaptchaCache) generate() {
 // CAPTCHA VERIFICATION PARAM — IN-MEMORY (no FIFO / named pipe)
 // ============================================================================
 
+// captchaParamOverride, when non-empty, is returned by getCaptchaVerifyParam
+// instead of hitting the real Aliyun machinery. It is a test seam in the
+// same spirit as wafProbeTransport (waf.go): whitebox tests set it to
+// drive sendToZAI against a mock upstream without agent mode (the cache
+// path is agent-mode only). Production never sets it.
+var captchaParamOverride string
+
 func getCaptchaVerifyParam() (string, error) {
+    if captchaParamOverride != "" {
+        return captchaParamOverride, nil
+    }
     if config.AgentMode {
         if val, ok := captchaCache.Get(); ok {
             logInfo("[Captcha Cache] hit - using cached param")

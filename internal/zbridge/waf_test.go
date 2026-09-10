@@ -193,6 +193,7 @@ func TestBreakerStopsCaptchaSpend(t *testing.T) {
         ClientMessagesRaw json.RawMessage
         Files             []map[string]interface{}
         RequestID         string
+        AdvancedSearch    bool
     }{Model: "glm-4.7", ChatID: "chat-1"}
     err := sendToZAIStream("probe test", opts, make(chan ZAIResult, 1))
     if err == nil {
