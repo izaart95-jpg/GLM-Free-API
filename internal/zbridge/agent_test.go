@@ -205,17 +205,34 @@ func TestStreamInterceptorReplaysFlatPayloadDebugStream(t *testing.T) {
 }
 
 // The prompt must pin the payload schema: the bare "{JSON}" placeholder is
-// what let the model invent the flat shape in the first place.
+// what let the model invent the flat shape in the first place. Issue #44
+// sharpened this further: the literal block is shown on its own lines in
+// both the <system> contract and the <output_rules> reminder, the
+// consequence of paraphrasing is stated (the scanner is literal), and the
+// observed derailment spellings are named as discarded. The example call
+// (agentExampleCall) gives the model a filled-in block to copy from the
+// very first turn — derailments clustered there, before any <recent>
+// replay exists to imitate.
 func TestAgentPromptPinsPayloadSchema(t *testing.T) {
     prompt := buildAgentPrompt(
         []agentMessage{{Role: "user", Content: []byte(`"Find my public ip"`)}},
         []openAITool{{Type: "function", Function: &openAIFnSpec{Name: "bash"}}},
     )
     for _, want := range []string{
-        `<<<TOOL_CALL>>>{"name":"<tool_name>","arguments":{<parameter JSON>}}<<<END_TOOL_CALL>>>`,
-        `EXACTLY two keys`,
+        // <system> contract: the literal block, markers on their own lines.
+        "<<<TOOL_CALL>>>\n" + agentCallSchema + "\n<<<END_TOOL_CALL>>>",
+        "exactly two keys",
         `"name"`,
         `"arguments"`,
+        // consequence framing — the reason a paraphrase never executes.
+        "literal scanner",
+        // the derailment spellings observed in the wild are named discarded.
+        "TOOL_CALL_BLOCK",
+        "Discarded forms",
+        // <output_rules> repeats the block verbatim at the tail.
+        "<<<TOOL_CALL>>>\n" + `{"name":"<tool_name>","arguments":{...}}` + "\n<<<END_TOOL_CALL>>>",
+        // one concrete filled-in example call for the first turn.
+        `<<<TOOL_CALL>>>` + "\n" + `{"name":"bash","arguments":{}}` + "\n" + `<<<END_TOOL_CALL>>>`,
     } {
         if !strings.Contains(prompt, want) {
             t.Errorf("agent prompt missing schema fragment %q", want)
@@ -223,6 +240,24 @@ func TestAgentPromptPinsPayloadSchema(t *testing.T) {
     }
     if strings.Contains(prompt, "{JSON}") {
         t.Errorf("agent prompt still carries the underspecified {JSON} placeholder")
+    }
+    if strings.Count(prompt, "<<<TOOL_CALL>>>") < 3 {
+        t.Errorf("expected the literal opening marker pinned in <system>, the example call and <output_rules>, found %d", strings.Count(prompt, "<<<TOOL_CALL>>>"))
+    }
+}
+
+// The strict contract must stay short (issue #44: "don't make the tool call
+// prompt too long"). Emphasis comes from precision and repetition at the
+// prompt's head and tail, not from volume — if the contract balloons again,
+// this guard forces a conscious decision instead of quiet growth.
+func TestAgentPromptStaysCompact(t *testing.T) {
+    // agentSystemPrefix + agentFinalReminder + the example call — the
+    // fixed prompt furniture around the variable <tools>/<recent> content.
+    furniture := len(agentSystemPrefix) + len(agentFinalReminder) +
+        len(agentExampleCall([]openAITool{{Type: "function", Function: &openAIFnSpec{Name: "bash"}}}))
+    const budget = 2600
+    if furniture > budget {
+        t.Errorf("fixed prompt furniture is %d bytes, budget is %d — trim the contract", furniture, budget)
     }
 }
 

@@ -184,34 +184,48 @@ func findAgentSpans(text string) []agentSpan {
 // map back to OpenAI tool_calls reliably.
 const agentCallSchema = `{"name":"<tool_name>","arguments":{<parameter JSON>}}`
 
+// agentSystemPrefix is the head of the folded agent prompt. Issue #44: on
+// long-horizon tasks the model occasionally paraphrased the markers
+// (TOOL_CALL_BLOCK, <tool_call>, fenced blocks) and the call reached the
+// client as plain text. The contract therefore (1) shows the literal block
+// on its own lines instead of inlining it into a sentence, (2) states the
+// consequence of deviation — the scanner is literal, so a paraphrased
+// marker means the tool is never executed — and (3) names the exact
+// derailment spellings as discarded, giving the model concrete negatives.
+// It stays deliberately short: the same template is repeated verbatim in
+// agentFinalReminder at the prompt's tail (recency), and the two bracket
+// the tool list and history that sit between them.
 const agentSystemPrefix = "<system>\n" +
-    "You are a helpful assistant with access to tools. Follow these rules strictly:\n" +
+    "You are an agent with access to the tools listed in <tools>. Your output is parsed by a literal scanner \u2014 not a human, not an AI: it recognizes ONLY the exact byte strings below. A tool call in any paraphrased, renamed, restyled or fenced form is NOT executed; the user just sees raw text.\n" +
     "\n" +
-    "REPLY FORMAT \u2014 exactly ONE of:\n" +
-    "(A) TOOL CALL: <<<TOOL_CALL>>>" + agentCallSchema + "<<<END_TOOL_CALL>>> \u2014 nothing before or after.\n" +
-    "    The JSON object has EXACTLY two keys: \"name\" (the tool to call, spelled exactly as in <tools>) and \"arguments\" (an object with ONLY that tool's parameters).\n" +
-    "(B) FINAL ANSWER: plain text, only when no tool applies.\n" +
+    "TOOL CALL \u2014 exactly this shape, nothing before or after, no code fences:\n" +
+    "<<<TOOL_CALL>>>\n" +
+    agentCallSchema + "\n" +
+    "<<<END_TOOL_CALL>>>\n" +
+    "Both markers are literal constants: copy them character for character, never rename or reimagine them. The JSON has exactly two keys \u2014 \"name\" (a tool from <tools>) and \"arguments\" (that tool's parameter object); no \"tool\" key, no flat payloads. Discarded forms include <tool_call> tags, TOOL_CALL_BLOCK, any renamed marker, and any block wrapped in a code fence \u2014 with those the tool never runs.\n" +
+    "\n" +
+    "FINAL ANSWER \u2014 plain text, no markers, only when no tool is needed.\n" +
     "\n" +
     "RULES:\n" +
-    "- Never announce plans (\u201cI\u2019ll...\u201d, \u201cLet me...\u201d). Emit the block \u2014 that IS the action.\n" +
-    "- Never print code fences (" + "```bash" + ", " + "```json" + "). Only the runtime executes tools.\n" +
-    "- Never wrap tool-call markers in code fences.\n" +
-    "- Never invent results. Stop at <<<END_TOOL_CALL>>> and wait for tool output.\n" +
-    "- Never call a tool not listed in <tools>.\n" +
-    "- PROGRESS: every turn must move the task forward. If the last tool result already answers the current step, do NOT call the same tool again \u2014 either advance to the next step or give the final answer.\n" +
-    "- NEVER REPEAT: do not re-issue any tool call already listed in <already_called>. If its result was insufficient, change the call (different arguments or different tool), never resend it as-is.\n" +
-    "- If the task is fully done, answer with the result in plain text \u2014 do not start another tool call.\n" +
+    "- Never narrate an action in words; the block IS the action. Stop right after <<<END_TOOL_CALL>>> and wait for the <tool_result>.\n" +
+    "- Never invent results. Never call a tool not listed in <tools>.\n" +
+    "- NO REPEATS: never re-issue a call listed in <already_called>; change the call instead. If the last tool result already answers this step, advance to the next step or give the final answer.\n" +
+    "- Task fully done \u2192 answer in plain text, no block.\n" +
     "</system>"
 
 // agentFinalReminder is appended at the very end of the prompt. Models weight
 // the end of the prompt most heavily (recency bias), so the output contract
-// is repeated here as the last thing the model sees.
+// is repeated here as the last thing the model sees — with the literal block
+// on its own lines, byte-for-byte identical to the <system> contract.
 const agentFinalReminder = `<output_rules>
-RESPOND WITH EXACTLY ONE OF:
-1. <<<TOOL_CALL>>>{"name":"<tool_name>","arguments":{...}}<<<END_TOOL_CALL>>> (no fences, no other text)
-2. Plain text final answer (only if no tool applies to this step)
-The tool-call JSON uses EXACTLY the keys "name" and "arguments" — never a "tool" key, never bare top-level parameters.
-NO REPEATS: a call already listed in <already_called> must not be re-issued. Same step answered? Move on or answer in plain text.
+Respond with exactly ONE of:
+1. A tool call — the shape below copied character for character, markers never renamed, no code fences, no other text:
+<<<TOOL_CALL>>>
+{"name":"<tool_name>","arguments":{...}}
+<<<END_TOOL_CALL>>>
+The scanner matches only these exact strings; any other form is dropped as plain text and the tool never runs.
+2. Plain text, only when no tool applies.
+Never re-issue a call listed in <already_called>.
 </output_rules>`
 
 // ── OpenAI wire types ────────────────────────────────────────────────────────
@@ -334,6 +348,28 @@ func renderAgentTools(tools []openAITool) string {
         b.WriteString("\n")
     }
     return strings.TrimSuffix(b.String(), "\n")
+}
+
+// agentExampleCall renders one concrete, filled-in example tool call in the
+// exact wire shape, using the first declared tool's real name. Issue #44:
+// derailments (renamed markers, fenced blocks, invented envelopes) clustered
+// on the FIRST call of a session — the turn where no <recent> replay of a
+// previous well-formed block exists yet for the model to imitate. The
+// example is the block itself, never executed, with a one-line label; the
+// arguments object is left empty and the model fills it from the tool's
+// schema. Returns "" when no named tool exists.
+func agentExampleCall(tools []openAITool) string {
+    for _, tool := range tools {
+        name := tool.fnName()
+        if name == "" {
+            continue
+        }
+        return "Example of a correct tool call (this exact shape, with the arguments filled in):\n" +
+            "<<<TOOL_CALL>>>\n" +
+            fmt.Sprintf(`{"name":%q,"arguments":{}}`, name) + "\n" +
+            "<<<END_TOOL_CALL>>>"
+    }
+    return ""
 }
 
 // agentCallPayload is the JSON object emitted inside a tool-call block.
@@ -531,10 +567,19 @@ func buildAgentPrompt(messages []agentMessage, tools []openAITool) string {
     b.WriteString(agentSystemPrefix)
     b.WriteString("\n\n")
 
-    // 2. Tool contract.
+    // 2. Tool contract, followed by one concrete filled-in example call
+    //    (issue #44: derailments clustered on the FIRST call of a session,
+    //    when no <recent> replay exists yet to imitate — the example gives
+    //    the exact bytes to copy from turn one). It is built from the
+    //    request's first declared tool so the name is always one the model
+    //    is actually allowed to call.
     b.WriteString("<tools>\n")
     b.WriteString(renderAgentTools(tools))
     b.WriteString("\n</tools>\n\n")
+    if example := agentExampleCall(tools); example != "" {
+        b.WriteString(example)
+        b.WriteString("\n\n")
+    }
 
     // 3. Split messages into old (summarizable) and recent.
     oldExchanges, recentMessages := extractToolExchanges(messages)
