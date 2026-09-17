@@ -65,6 +65,9 @@ type SendOptions struct {
     Messages          []Message
     ClientMessagesRaw json.RawMessage
     ReasoningEffort   string // "high" or "max"; only forwarded if model supports it
+    // ToolsRaw carries the request's OpenAI tools array for the ultra repair
+    // prompt context (agent_ultra.go). Purely local: never reaches upstream.
+    ToolsRaw json.RawMessage
     // Files carries already-uploaded Z.AI file entries (see vision.go) to
     // attach to the upstream completion request as the top-level "files"
     // array. Empty for text-only requests (field then stays out of the body).

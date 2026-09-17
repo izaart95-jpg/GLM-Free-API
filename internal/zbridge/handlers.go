@@ -131,6 +131,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         ReasoningEffort:   body.ReasoningEffort,
         Files:             files,
         RequestID:         requestId,
+        ToolsRaw:          body.Tools,
     }
 
     // Parse thinking configuration:
@@ -207,8 +208,15 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         fullReasoning := ""
 
         var interceptor agentInterceptor
+        var ultraBuf *UltraBuffer
         if config.AgentMode {
-            interceptor = newAgentInterceptor()
+            if UltraRepairEnabled() {
+                // §3: ultra buffers the stream for validator + ToolParserLLM repair
+                // instead of forwarding incrementally.
+                ultraBuf = NewUltraBuffer(body.Tools)
+            } else {
+                interceptor = newAgentInterceptor()
+            }
         }
         toolCallEmitted := false
 
@@ -307,6 +315,9 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
                     if interceptor != nil {
                         interceptor = rearmAgentInterceptor(interceptor)
                     }
+                    if ultraBuf != nil {
+                        ultraBuf.ResetTo(result.FullText)
+                    }
                 }
                 if result.FullText != "" {
                     fullContent = result.FullText
@@ -320,6 +331,12 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
                     continue
                 }
 
+                if ultraBuf != nil {
+                    // §3.1: buffer instead of streaming immediately; the
+                    // validator + repair decision runs once at Finish.
+                    ultraBuf.Feed(delta)
+                    continue
+                }
                 if interceptor != nil {
                     contentDelta, toolCalls := interceptor.feed(delta)
                     if contentDelta != "" {
@@ -338,7 +355,40 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         if !errored {
-            if interceptor != nil {
+            if ultraBuf != nil {
+                // §3.3–§3.4 + §4: validate the buffered text, repair
+                // malformed spans via ToolParserLLM, then replay through the stock
+                // interceptor so chunk ordering and the final terminator
+                // match the non-ultra path from here on.
+                content, toolCalls := ultraBuf.Finish()
+                if content != "" {
+                    c := formatOpenAIResponse(ResponseResult{Content: content}, model, requestId, true)
+                    writeSSE(toJSON(c))
+                }
+                for _, tc := range toolCalls {
+                    emitToolCallDelta(tc)
+                    toolCallEmitted = true
+                }
+                if toolCallEmitted {
+                    finalChunk := map[string]interface{}{
+                        "id":      "chatcmpl-" + requestId,
+                        "object":  "chat.completion.chunk",
+                        "created": time.Now().Unix(),
+                        "model":   model,
+                        "choices": []map[string]interface{}{
+                            {
+                                "index":         0,
+                                "delta":         map[string]interface{}{},
+                                "finish_reason": "tool_calls",
+                            },
+                        },
+                    }
+                    writeSSE(toJSON(finalChunk))
+                } else {
+                    finalChunk := formatOpenAIResponse(ResponseResult{Content: "", FinishReason: "stop"}, model, requestId, true)
+                    writeSSE(toJSON(finalChunk))
+                }
+            } else if interceptor != nil {
                 // Drain the interceptor tail: trailing text plus any
                 // tool call whose block only completed at end of stream
                 // (the modern shim holds back a window while streaming).
@@ -410,6 +460,12 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 
         // Agent-mode: parse out tool-call blocks for non-stream response
         if config.AgentMode {
+            if UltraRepairEnabled() {
+                // §4: repair malformed spans before parsing; valid canonical
+                // bypasses ToolParserLLM inside RepairUltraBuffer, plain text passes
+                // through byte-identical.
+                fullContent = UltraRepairFullText(fullContent, body.Tools)
+            }
             toolCalls := agentExtractToolCalls(fullContent)
             if len(toolCalls) > 0 {
                 stripped := agentStripToolCalls(fullContent)

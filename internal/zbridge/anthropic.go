@@ -441,6 +441,7 @@ func anthropicMessagesHandler(w http.ResponseWriter, r *http.Request) {
         ReasoningEffort:   body.ReasoningEffort,
         Files:             files,
         RequestID:         requestId,
+        ToolsRaw:          body.Tools,
     }
 
     if body.Reasoning != nil {
@@ -606,8 +607,14 @@ func anthropicStreamResponse(w http.ResponseWriter, prompt string, opts SendOpti
     }
 
     var interceptor agentInterceptor
+    var ultraBuf *UltraBuffer
     if config.AgentMode {
-        interceptor = newAgentInterceptor()
+        if UltraRepairEnabled() {
+            // §3: ultra buffers the stream for validator + ToolParserLLM repair.
+            ultraBuf = NewUltraBuffer(opts.ToolsRaw)
+        } else {
+            interceptor = newAgentInterceptor()
+        }
     }
 
     fullContent := ""
@@ -656,6 +663,9 @@ func anthropicStreamResponse(w http.ResponseWriter, prompt string, opts SendOpti
             if interceptor != nil {
                 interceptor = rearmAgentInterceptor(interceptor)
             }
+            if ultraBuf != nil {
+                ultraBuf.ResetTo(result.FullText)
+            }
         }
         if result.FullText != "" {
             fullContent = result.FullText
@@ -669,6 +679,11 @@ func anthropicStreamResponse(w http.ResponseWriter, prompt string, opts SendOpti
             continue
         }
 
+        if ultraBuf != nil {
+            // §3.1: buffer instead of streaming immediately.
+            ultraBuf.Feed(delta)
+            continue
+        }
         if interceptor != nil {
             contentDelta, toolCalls := interceptor.feed(delta)
             if contentDelta != "" {
@@ -708,7 +723,29 @@ func anthropicStreamResponse(w http.ResponseWriter, prompt string, opts SendOpti
 
     // Drain the interceptor tail: trailing text plus any tool call whose
     // block only completed at end of stream (modern shim hold-back window).
-    if interceptor != nil {
+    // In ultra mode the buffered text is validated + repaired first, then
+    // replayed through the stock interceptor to preserve event ordering.
+    if ultraBuf != nil {
+        content, toolCalls := ultraBuf.Finish()
+        if content != "" {
+            if currentBlockType != "text" {
+                stopBlock()
+                startBlock("text", map[string]interface{}{"text": ""})
+            }
+            writeEvent("content_block_delta", map[string]interface{}{
+                "type":  "content_block_delta",
+                "index": blockIndex,
+                "delta": map[string]interface{}{
+                    "type": "text_delta",
+                    "text": content,
+                },
+            })
+            outputTokens += estimateTokens(content)
+        }
+        for _, tc := range toolCalls {
+            emitToolCallEvent(tc)
+        }
+    } else if interceptor != nil {
         rem, tailCalls := interceptor.finish()
         if rem != "" && !toolCallEmitted {
             if currentBlockType != "text" {
@@ -791,6 +828,10 @@ func anthropicNonStreamResponse(w http.ResponseWriter, prompt string, opts SendO
     }
 
     if config.AgentMode {
+        if UltraRepairEnabled() {
+            // §4: repair malformed spans before parsing (valid bypasses ToolParserLLM).
+            fullContent = UltraRepairFullText(fullContent, opts.ToolsRaw)
+        }
         toolCalls := agentExtractToolCalls(fullContent)
         if len(toolCalls) > 0 {
             stripped := agentStripToolCalls(fullContent)
