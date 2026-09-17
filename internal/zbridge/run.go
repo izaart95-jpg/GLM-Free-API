@@ -61,6 +61,8 @@ func Run() {
     flag.BoolVar(&verbose, "verbose", false, "Enable verbose logging")
     flag.BoolVar(&config.AgentMode, "agent-mode", config.AgentMode, "Enable agent mode: translate tools & roles for Z.AI compatibility (modern shim by default)")
     flag.StringVar(&config.AgentModeVariant, "agent-mode-variant", config.AgentModeVariant, "Agent mode shim variant: modern (default, XML-sectioned prompt) or legacy ([ROLE: ...] rewrite)")
+    flag.StringVar(&config.AgentModeLevel, "agent-mode-level", config.AgentModeLevel, "Agent mode repair level: empty (default, stock parser only) or ultra (buffer + V28 malformed-tool repair; requires --agent-mode)")
+    flag.BoolVar(&config.ForceCPU, "force-cpu", config.ForceCPU, "Allow V28 ultra repair on CPU-only hosts (degraded path; CPU inference is NOT recommended, GPU+SGLang is required otherwise)")
     flag.BoolVar(&config.SyncMode, "sync-mode", config.SyncMode, "Legacy synchronous session flow: create a fresh chat per request instead of drawing from the pre-warmed session pool (used sessions are still deleted on Z.AI after each response)")
     flag.Parse()
 
@@ -87,6 +89,17 @@ func Run() {
         } else {
             logInfo("Agent mode variant: LEGACY ([ROLE: ...] message rewrite shim)")
         }
+    }
+
+    // ── V28 ultra repair (strict opt-in: --agent-mode + --agent-mode-level=ultra) ──
+    // Dormant otherwise: no load, no warm-up, no reference to V28.
+    if config.UltraEnabled() {
+        log.Printf("[V28] ultra repair enabled (%s) — ensuring base+LoRA assets and SGLang backend", ultraGateDebug())
+        if err := EnsureV28ForUltra(context.Background()); err != nil {
+            fmt.Fprintf(os.Stderr, "V28 ultra startup failed: %v\n", err)
+            os.Exit(1)
+        }
+        log.Printf("[V28] ultra repair ready (SGLang at %s)", V28SGLangBaseURL())
     }
 
     handler := NewHandler()

@@ -49,6 +49,16 @@ type Config struct {
     //                        DeepseekFreeAPI (see agent.go)
     //   "legacy"           — the original [ROLE: ...] rewrite shim
     AgentModeVariant string
+    // AgentModeLevel gates the opt-in V28 intelligent repair layer (see
+    // agent_ultra.go / v28.go). Only the exact value "ultra" (case
+    // insensitive) enables buffering + V28 repair, and only together with
+    // AgentMode. Any other value (including the default "") keeps V28
+    // completely dormant: no load, no warm-up, no reference.
+    AgentModeLevel string
+    // ForceCPU explicitly opts into the degraded CPU inference path for V28
+    // in ultra mode on machines without a GPU. Without it, ultra mode on a
+    // CPU-only host aborts startup with an actionable error.
+    ForceCPU bool
     Logging   struct {
         Level  string
         Format string
@@ -85,6 +95,8 @@ func loadConfig() *Config {
     c.ZaiToken = ""
     c.AgentMode = false
     c.AgentModeVariant = "modern"
+    c.AgentModeLevel = ""
+    c.ForceCPU = false
     c.Logging.Level = "debug"
     c.Logging.Format = "text"
     c.KnownModels = []string{"GLM-5.1", "GLM-5"}
@@ -134,6 +146,29 @@ func loadConfig() *Config {
             c.AgentModeVariant = "modern"
         }
     }
+    // AGENT_MODE_LEVEL gates the V28 repair layer. Only "ultra" enables it
+    // (together with AGENT_MODE). Any other value keeps V28 dormant.
+    if v := os.Getenv("AGENT_MODE_LEVEL"); v != "" {
+        c.AgentModeLevel = strings.ToLower(strings.TrimSpace(v))
+    }
+    // FORCE_CPU (or V28_FORCE_CPU alias) opts into degraded CPU inference
+    // for V28 ultra mode. Without it, ultra on CPU-only aborts at startup.
+    if v := os.Getenv("FORCE_CPU"); v != "" {
+        switch strings.ToLower(strings.TrimSpace(v)) {
+        case "1", "true", "yes", "on":
+            c.ForceCPU = true
+        case "0", "false", "no", "off":
+            c.ForceCPU = false
+        }
+    }
+    if v := os.Getenv("V28_FORCE_CPU"); v != "" {
+        switch strings.ToLower(strings.TrimSpace(v)) {
+        case "1", "true", "yes", "on":
+            c.ForceCPU = true
+        case "0", "false", "no", "off":
+            c.ForceCPU = false
+        }
+    }
     if l := os.Getenv("LOG_LEVEL"); l != "" {
         c.Logging.Level = l
     }
@@ -180,5 +215,20 @@ func (c *Config) agentModern() bool {
 // message rewriting — see transformMessagesForAgent) is active.
 func (c *Config) agentLegacy() bool {
     return c.AgentMode && strings.EqualFold(c.AgentModeVariant, "legacy")
+}
+
+// UltraEnabled reports whether the V28 intelligent repair layer is active.
+// Strict opt-in: BOTH --agent-mode AND --agent-mode-level=ultra are required.
+// Every other combination keeps V28 completely dormant (no load, no warm-up,
+// no reference). See agent_ultra.go / v28.go.
+func (c *Config) UltraEnabled() bool {
+    return c.AgentMode && strings.EqualFold(strings.TrimSpace(c.AgentModeLevel), "ultra")
+}
+
+// UltraRepairEnabled is the package-level gate used by request handlers.
+// It mirrors Config.UltraEnabled on the live config so call sites stay terse
+// while the dormancy contract stays in one place.
+func UltraRepairEnabled() bool {
+    return config.UltraEnabled()
 }
 
