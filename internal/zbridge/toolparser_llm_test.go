@@ -1,4 +1,5 @@
-// v28_test.go — V28 loader: hardware policy, download/verify/cache,
+// toolparser_llm_test.go — ToolParserLLM loader: hardware policy,
+// download/verify/cache,
 // canonical spec, and repair-prompt shape (§5).
 
 package zbridge
@@ -12,8 +13,8 @@ import (
 	"time"
 )
 
-func TestV28CanonicalSpecPinned(t *testing.T) {
-	spec := V28CanonicalSpec()
+func TestToolParserLLMCanonicalSpecPinned(t *testing.T) {
+	spec := ToolParserLLMCanonicalSpec()
 	for _, want := range []string{agentToolStart, agentToolEnd, agentCallSchema, `"name"`, `"arguments"`} {
 		if !strings.Contains(spec, want) {
 			t.Errorf("canonical spec missing %q:\n%s", want, spec)
@@ -21,10 +22,26 @@ func TestV28CanonicalSpecPinned(t *testing.T) {
 	}
 }
 
-func TestV28RepairPromptUsesFragmentOnly(t *testing.T) {
+// The LoRA bundle must come from the public Kaggle dataset — never a
+// placeholder. Guards against regressions to an unfetchable URL.
+func TestToolParserLLMLoRAURLIsPublicDataset(t *testing.T) {
+	const want = "https://www.kaggle.com/api/v1/datasets/download/zoxoashouko/v28-flagship-toolparser"
+	if ToolParserLLMLoRAURL != want {
+		t.Errorf("default LoRA URL = %q, want public dataset %q", ToolParserLLMLoRAURL, want)
+	}
+	if strings.Contains(ToolParserLLMLoRAURL, "placeholder") {
+		t.Errorf("LoRA URL still points at a placeholder: %q", ToolParserLLMLoRAURL)
+	}
+	t.Setenv("TOOLPARSER_LLM_LORA_URL", "https://example.com/mirror.zip")
+	if got := toolParserLLMLoRAURL(); got != "https://example.com/mirror.zip" {
+		t.Errorf("env override ignored: got %q", got)
+	}
+}
+
+func TestToolParserLLMRepairPromptUsesFragmentOnly(t *testing.T) {
 	frag := `<tool_call>{"tool":"bash"}</tool_call>`
 	tools := `[{"name":"bash"}]`
-	p := V28RepairPrompt(frag, tools)
+	p := ToolParserLLMRepairPrompt(frag, tools)
 	if !strings.Contains(p, frag) {
 		t.Errorf("prompt missing fragment")
 	}
@@ -41,7 +58,7 @@ func TestV28RepairPromptUsesFragmentOnly(t *testing.T) {
 	}
 }
 
-func TestV28CPUGuardAbortsWithoutForce(t *testing.T) {
+func TestToolParserLLMCPUGuardAbortsWithoutForce(t *testing.T) {
 	restore := withUltraGate(true, "ultra", false)
 	defer restore()
 	hasGPU, _ := DetectGPU()
@@ -50,7 +67,7 @@ func TestV28CPUGuardAbortsWithoutForce(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	err := EnsureV28ForUltra(ctx)
+	err := EnsureToolParserLLMForUltra(ctx)
 	if err == nil {
 		t.Fatal("CPU-only ultra without --force-cpu must abort startup")
 	}
@@ -63,7 +80,7 @@ func TestV28CPUGuardAbortsWithoutForce(t *testing.T) {
 	}
 }
 
-func TestV28AssetsLocalOverrideNoNetwork(t *testing.T) {
+func TestToolParserLLMAssetsLocalOverrideNoNetwork(t *testing.T) {
 	// A directory containing weights + config satisfies the bundle gate
 	// without any download (air-gapped / CI path).
 	lora := t.TempDir()
@@ -74,11 +91,11 @@ func TestV28AssetsLocalOverrideNoNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := t.TempDir()
-	t.Setenv("V28_LORA_PATH", lora)
-	t.Setenv("V28_BASE_PATH", base)
+	t.Setenv("TOOLPARSER_LLM_LORA_PATH", lora)
+	t.Setenv("TOOLPARSER_LLM_BASE_PATH", base)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	gotBase, gotLora, err := EnsureV28Assets(ctx)
+	gotBase, gotLora, err := EnsureToolParserLLMAssets(ctx)
 	if err != nil {
 		t.Fatalf("local-override assets failed: %v", err)
 	}
@@ -90,7 +107,7 @@ func TestV28AssetsLocalOverrideNoNetwork(t *testing.T) {
 	}
 }
 
-func TestV28BundleVerificationRejectsIncomplete(t *testing.T) {
+func TestToolParserLLMBundleVerificationRejectsIncomplete(t *testing.T) {
 	empty := t.TempDir() // no weights/config
 	if err := verifyLoRABundle(empty); err == nil {
 		t.Error("empty dir must fail bundle verification")
@@ -105,7 +122,7 @@ func TestV28BundleVerificationRejectsIncomplete(t *testing.T) {
 	}
 }
 
-func TestV28DetectGPUReturnsEvidence(t *testing.T) {
+func TestToolParserLLMDetectGPUReturnsEvidence(t *testing.T) {
 	ok, evidence := DetectGPU()
 	if strings.TrimSpace(evidence) == "" {
 		t.Error("DetectGPU must always return human-readable evidence")

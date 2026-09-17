@@ -211,7 +211,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         var ultraBuf *UltraBuffer
         if config.AgentMode {
             if UltraRepairEnabled() {
-                // §3: ultra buffers the stream for validator + V28 repair
+                // §3: ultra buffers the stream for validator + ToolParserLLM repair
                 // instead of forwarding incrementally.
                 ultraBuf = NewUltraBuffer(body.Tools)
             } else {
@@ -357,7 +357,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         if !errored {
             if ultraBuf != nil {
                 // §3.3–§3.4 + §4: validate the buffered text, repair
-                // malformed spans via V28, then replay through the stock
+                // malformed spans via ToolParserLLM, then replay through the stock
                 // interceptor so chunk ordering and the final terminator
                 // match the non-ultra path from here on.
                 content, toolCalls := ultraBuf.Finish()
@@ -462,7 +462,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         if config.AgentMode {
             if UltraRepairEnabled() {
                 // §4: repair malformed spans before parsing; valid canonical
-                // bypasses V28 inside RepairUltraBuffer, plain text passes
+                // bypasses ToolParserLLM inside RepairUltraBuffer, plain text passes
                 // through byte-identical.
                 fullContent = UltraRepairFullText(fullContent, body.Tools)
             }

@@ -49,13 +49,14 @@ type Config struct {
     //                        DeepseekFreeAPI (see agent.go)
     //   "legacy"           — the original [ROLE: ...] rewrite shim
     AgentModeVariant string
-    // AgentModeLevel gates the opt-in V28 intelligent repair layer (see
-    // agent_ultra.go / v28.go). Only the exact value "ultra" (case
-    // insensitive) enables buffering + V28 repair, and only together with
-    // AgentMode. Any other value (including the default "") keeps V28
+    // AgentModeLevel gates the opt-in ToolParserLLM intelligent repair layer
+    // (see agent_ultra.go / toolparser_llm.go). Only the exact value "ultra"
+    // (case insensitive) enables buffering + repair, and only together with
+    // AgentMode. Any other value (including the default "") keeps ToolParserLLM
     // completely dormant: no load, no warm-up, no reference.
     AgentModeLevel string
-    // ForceCPU explicitly opts into the degraded CPU inference path for V28
+    // ForceCPU explicitly opts into the degraded CPU inference path for
+    // ToolParserLLM
     // in ultra mode on machines without a GPU. Without it, ultra mode on a
     // CPU-only host aborts startup with an actionable error.
     ForceCPU bool
@@ -146,13 +147,14 @@ func loadConfig() *Config {
             c.AgentModeVariant = "modern"
         }
     }
-    // AGENT_MODE_LEVEL gates the V28 repair layer. Only "ultra" enables it
-    // (together with AGENT_MODE). Any other value keeps V28 dormant.
+    // AGENT_MODE_LEVEL gates the ToolParserLLM repair layer. Only "ultra"
+    // enables it (together with AGENT_MODE). Any other value keeps it dormant.
     if v := os.Getenv("AGENT_MODE_LEVEL"); v != "" {
         c.AgentModeLevel = strings.ToLower(strings.TrimSpace(v))
     }
-    // FORCE_CPU (or V28_FORCE_CPU alias) opts into degraded CPU inference
-    // for V28 ultra mode. Without it, ultra on CPU-only aborts at startup.
+    // FORCE_CPU (or TOOLPARSER_LLM_FORCE_CPU alias) opts into degraded CPU
+    // inference for ToolParserLLM ultra mode. Without it, ultra on CPU-only
+    // aborts at startup.
     if v := os.Getenv("FORCE_CPU"); v != "" {
         switch strings.ToLower(strings.TrimSpace(v)) {
         case "1", "true", "yes", "on":
@@ -161,7 +163,7 @@ func loadConfig() *Config {
             c.ForceCPU = false
         }
     }
-    if v := os.Getenv("V28_FORCE_CPU"); v != "" {
+    if v := os.Getenv("TOOLPARSER_LLM_FORCE_CPU"); v != "" {
         switch strings.ToLower(strings.TrimSpace(v)) {
         case "1", "true", "yes", "on":
             c.ForceCPU = true
@@ -217,10 +219,11 @@ func (c *Config) agentLegacy() bool {
     return c.AgentMode && strings.EqualFold(c.AgentModeVariant, "legacy")
 }
 
-// UltraEnabled reports whether the V28 intelligent repair layer is active.
-// Strict opt-in: BOTH --agent-mode AND --agent-mode-level=ultra are required.
-// Every other combination keeps V28 completely dormant (no load, no warm-up,
-// no reference). See agent_ultra.go / v28.go.
+// UltraEnabled reports whether the ToolParserLLM intelligent repair layer
+// is active. Strict opt-in: BOTH --agent-mode AND --agent-mode-level=ultra
+// are required. Every other combination keeps ToolParserLLM completely
+// dormant (no load, no warm-up, no reference). See agent_ultra.go /
+// toolparser_llm.go.
 func (c *Config) UltraEnabled() bool {
     return c.AgentMode && strings.EqualFold(strings.TrimSpace(c.AgentModeLevel), "ultra")
 }

@@ -1,11 +1,11 @@
 // agent_ultra.go
 //
-// ULTRA MODE — V28 intelligent malformed-tool repair layer.
+// ULTRA MODE — ToolParserLLM intelligent malformed-tool repair layer.
 //
 // Strict opt-in: EVERY entry point in this file first checks
 // UltraRepairEnabled() (--agent-mode + --agent-mode-level=ultra).
 // When the gate is off the helpers return their input untouched and never
-// touch V28, so default and plain --agent-mode behaviour stay byte-for-byte
+// touch ToolParserLLM, so default and plain --agent-mode behaviour stay byte-for-byte
 // identical to upstream (see §6 non-regression).
 //
 // Ultra pipeline (§3–§4), active only under the gate:
@@ -16,14 +16,14 @@
 //  3. Otherwise extract ONLY the malformed tool-call span(s) — never the
 //     whole response — via intent heuristics, normalize structural noise,
 //     variablize long values (varpass mirror), and send the fragment +
-//     canonical spec to V28 for ONE canonical object back.
-//  4. Re-validate V28 output with the same validator; splice on success,
+//     canonical spec to ToolParserLLM for ONE canonical object back.
+//  4. Re-validate ToolParserLLM output with the same validator; splice on success,
 //     else forward the original fragment with a warning (never drop intent).
 //
 // Repair is idempotent (valid canonical input is returned unchanged) and
 // non-destructive (surrounding prose is preserved byte-for-byte; each
 // malformed span is handled independently). Every repair event is logged
-// with original / extracted / V28 output / decision.
+// with original / extracted / model output / decision.
 
 package zbridge
 
@@ -59,7 +59,7 @@ type UltraClassification int
 const (
 	// UltraPlain: no tool intent at all — passthrough as content.
 	UltraPlain UltraClassification = iota
-	// UltraValid: ≥1 valid canonical block and no malformed span — bypass V28.
+	// UltraValid: ≥1 valid canonical block and no malformed span — bypass ToolParserLLM.
 	UltraValid
 	// UltraMalformed: ≥1 malformed tool-call span — enter repair path.
 	UltraMalformed
@@ -92,18 +92,18 @@ func ClassifyUltra(text string) UltraClassification {
 
 // UltraSpan is one isolated malformed tool-call region: [Start,End) byte
 // offsets into the original buffered text plus the normalized fragment sent
-// toward V28.
+// toward ToolParserLLM.
 type UltraSpan struct {
 	Start, End int
-	Fragment   string // normalized, variablized skeleton actually sent to V28
+	Fragment   string // normalized, variablized skeleton actually sent to ToolParserLLM
 	Raw        string // original bytes at [Start,End)
 	VarMap     map[string]string
 }
 
 // Intent heuristics: each pattern names a malformed-tool shape observed in
-// the wild or in V28 training (v28 GENERALIZE families + issue #44
+// the wild or in ToolParserLLM training (GENERALIZE families + issue #44
 // derailments). Canonical <<<TOOL_CALL>>> blocks are matched separately and
-// explicitly EXCLUDED below, so valid calls always bypass V28 (§8).
+// explicitly EXCLUDED below, so valid calls always bypass ToolParserLLM (§8).
 var ultraIntentPatterns = []*regexp.Regexp{
 	// Renamed markers / envelopes.
 	regexp.MustCompile(`(?i)TOOL_CALL_BLOCK`),
@@ -111,7 +111,7 @@ var ultraIntentPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?is)<\s*tool_args\s*>.*?<\s*/\s*tool_args\s*>`),
 	regexp.MustCompile(`(?i)<\s*invoke\b[^>]*>.*?<\s*/\s*invoke\s*>`),
 	regexp.MustCompile(`DSML`),
-	// V28 GENERALIZE wrapper families (train): xml_upper, sexpr, at_call,
+	// GENERALIZE wrapper families (train): xml_upper, sexpr, at_call,
 	// shell_export, hash_flag, double_brace, json_toolkey, ini_section,
 	// md_tool — plus held-out pipe_kv / csv_row / angle_json.
 	regexp.MustCompile(`(?is)<TOOL><NAME>.*?</ARGS></TOOL>`),
@@ -136,7 +136,7 @@ var ultraIntentPatterns = []*regexp.Regexp{
 }
 
 // ultraProtectedSpans returns the byte ranges of valid canonical blocks that
-// must never be treated as malformed (bypass-V28 guarantee).
+// must never be treated as malformed (bypass-ToolParserLLM guarantee).
 func ultraProtectedSpans(text string) [][2]int {
 	norm := NormalizeAgentFences(text)
 	// Map spans on the normalized text back conservatively: since fence
@@ -162,7 +162,7 @@ func overlapsProtected(start, end int, prot [][2]int) bool {
 	return false
 }
 
-// NormalizeUltraFragment removes obvious structural noise BEFORE V28 (§4.1):
+// NormalizeUltraFragment removes obvious structural noise BEFORE ToolParserLLM (§4.1):
 // surrounding whitespace, fences adjacent to the fragment, stray trailing
 // commas/semicolons, and fullwidth lookalikes. The semantic payload
 // (tool name + arguments) is preserved verbatim — only the skeleton is fixed.
@@ -263,7 +263,7 @@ func ultraHasIntent(s string) bool {
 }
 
 // ── varpass mirror (LONG sentinels) ────────────────────────────────────────
-// V28 was trained with varpass delexicalization: long values (≥150 chars, or
+// ToolParserLLM was trained with varpass delexicalization: long values (≥150 chars, or
 // ≥50 with a newline) are replaced by PUA sentinels before the model and
 // substituted back after. Mirroring that here keeps fragments small and the
 // payload exact. Only the two highest-value grammars are ported (fenced
@@ -340,7 +340,7 @@ func ultraRehydrate(s string, varmap map[string]string) string {
 type UltraRepairEvent struct {
 	OriginalFragment  string
 	ExtractedFragment string
-	V28Output         string
+	ModelOutput         string
 	Decision          string // "repaired" | "passthrough-valid" | "fallback-passthrough" | "fallback-invalid" | "no-repairer" | "plain"
 }
 
@@ -353,8 +353,8 @@ func logUltraEvent(ev UltraRepairEvent) {
 		}
 		return s
 	}
-	log.Printf("[UltraRepair] decision=%s original=%q extracted=%q v28=%q",
-		ev.Decision, tr(ev.OriginalFragment), tr(ev.ExtractedFragment), tr(ev.V28Output))
+	log.Printf("[UltraRepair] decision=%s original=%q extracted=%q model=%q",
+		ev.Decision, tr(ev.OriginalFragment), tr(ev.ExtractedFragment), tr(ev.ModelOutput))
 }
 
 // ── core repair (§4.2) ─────────────────────────────────────────────────────
@@ -362,23 +362,23 @@ func logUltraEvent(ev UltraRepairEvent) {
 // RepairUltraBuffer is the full §3–§4 pipeline on buffered text.
 // toolsJSON is the request's tools array (for the repair prompt context).
 // It is idempotent: valid canonical / plain input returns byte-identical.
-// Malformed spans are each repaired independently; V28 output is re-validated
+// Malformed spans are each repaired independently; model output is re-validated
 // before splicing, else the original fragment is kept with a warning log.
 // Never drops tool intent silently. Dormant (gate off) → input unchanged.
-func RepairUltraBuffer(fullText, toolsJSON string, repairer V28Repairer) (string, []UltraRepairEvent) {
+func RepairUltraBuffer(fullText, toolsJSON string, repairer ToolParserLLMRepairer) (string, []UltraRepairEvent) {
 	if !UltraRepairEnabled() {
 		return fullText, nil
 	}
 	class := ClassifyUltra(fullText)
 	if class != UltraMalformed {
-		return fullText, []UltraRepairEvent{{OriginalFragment: "", ExtractedFragment: "", V28Output: "", Decision: map[bool]string{true: "passthrough-valid", false: "plain"}[class == UltraValid]}}
+		return fullText, []UltraRepairEvent{{OriginalFragment: "", ExtractedFragment: "", ModelOutput: "", Decision: map[bool]string{true: "passthrough-valid", false: "plain"}[class == UltraValid]}}
 	}
 	spans := ExtractMalformedSpans(fullText)
 	if len(spans) == 0 {
 		return fullText, nil
 	}
 	if repairer == nil {
-		repairer = GetV28Repairer()
+		repairer = GetToolParserLLMRepairer()
 	}
 	out := fullText
 	// Splice back-to-front so earlier offsets stay valid.
@@ -392,27 +392,27 @@ func RepairUltraBuffer(fullText, toolsJSON string, repairer V28Repairer) (string
 		original := sp.Raw
 		fragment := sp.Fragment
 		if repairer == nil {
-			ev := UltraRepairEvent{OriginalFragment: original, ExtractedFragment: fragment, V28Output: "", Decision: "no-repairer"}
+			ev := UltraRepairEvent{OriginalFragment: original, ExtractedFragment: fragment, ModelOutput: "", Decision: "no-repairer"}
 			logUltraEvent(ev)
 			events = append(events, ev)
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		v28out, err := repairer.RepairFragment(ctx, fragment, toolsJSON)
+		modelOut, err := repairer.RepairFragment(ctx, fragment, toolsJSON)
 		cancel()
 		if err != nil {
-			ev := UltraRepairEvent{OriginalFragment: original, ExtractedFragment: fragment, V28Output: "ERROR: " + err.Error(), Decision: "fallback-passthrough"}
-			log.Printf("[UltraRepair] WARNING: V28 repair failed (%v); forwarding original malformed fragment (intent preserved)", err)
+			ev := UltraRepairEvent{OriginalFragment: original, ExtractedFragment: fragment, ModelOutput: "ERROR: " + err.Error(), Decision: "fallback-passthrough"}
+			log.Printf("[UltraRepair] WARNING: ToolParserLLM repair failed (%v); forwarding original malformed fragment (intent preserved)", err)
 			logUltraEvent(ev)
 			events = append(events, ev)
 			continue
 		}
-		rehyd := ultraRehydrate(strings.TrimSpace(v28out), sp.VarMap)
+		rehyd := ultraRehydrate(strings.TrimSpace(modelOut), sp.VarMap)
 		// Re-validate with the SAME validator (§4.2).
 		calls := ParseAgentToolCalls(rehyd)
 		if len(calls) == 0 {
-			ev := UltraRepairEvent{OriginalFragment: original, ExtractedFragment: fragment, V28Output: v28out, Decision: "fallback-invalid"}
-			log.Printf("[UltraRepair] WARNING: V28 output failed re-validation; forwarding original malformed fragment (intent preserved)")
+			ev := UltraRepairEvent{OriginalFragment: original, ExtractedFragment: fragment, ModelOutput: modelOut, Decision: "fallback-invalid"}
+			log.Printf("[UltraRepair] WARNING: ToolParserLLM output failed re-validation; forwarding original malformed fragment (intent preserved)")
 			logUltraEvent(ev)
 			events = append(events, ev)
 			continue
@@ -424,7 +424,7 @@ func RepairUltraBuffer(fullText, toolsJSON string, repairer V28Repairer) (string
 			block = rehyd
 		}
 		out = out[:sp.Start] + block + out[sp.End:]
-		ev := UltraRepairEvent{OriginalFragment: original, ExtractedFragment: fragment, V28Output: v28out, Decision: "repaired"}
+		ev := UltraRepairEvent{OriginalFragment: original, ExtractedFragment: fragment, ModelOutput: modelOut, Decision: "repaired"}
 		logUltraEvent(ev)
 		events = append(events, ev)
 	}

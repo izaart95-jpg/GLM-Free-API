@@ -1,15 +1,15 @@
-// v28.go
+// toolparser_llm.go
 //
-// V28 MODEL LOADER — Qwen2.5-0.5B-Instruct + LoRA tool-call normaliser.
+// TOOLPARSER-LLM MODEL LOADER — Qwen2.5-0.5B-Instruct + LoRA tool-call normaliser.
 //
 // Dormancy contract: nothing in this file runs unless ultra mode is active
 // (config.UltraEnabled() == --agent-mode + --agent-mode-level=ultra).
-// Run() calls EnsureV28ForUltra() only under that gate; request handlers
-// call GetV28Repairer() only under the same gate. Every other invocation
-// never loads, warms up, or references V28.
+// Run() calls EnsureToolParserLLMForUltra() only under that gate; request handlers
+// call GetToolParserLLMRepairer() only under the same gate. Every other invocation
+// never loads, warms up, or references ToolParserLLM.
 //
 // Deployment contract (task §5):
-//   - GPU available  → serve V28 via SGLang.
+//   - GPU available  → serve ToolParserLLM via SGLang.
 //   - CPU only       → print a clear "not recommended" warning and abort
 //                      startup unless --force-cpu is passed; with --force-cpu
 //                      proceed on a documented degraded CPU path.
@@ -39,24 +39,27 @@ import (
 
 // ── model identity ─────────────────────────────────────────────────────────
 
-// V28BaseModelID is the base checkpoint V28 was trained from (see
-// toolparser SESSION.md: Qwen/Qwen2.5-0.5B-Instruct, LoRA r16 α32 on
-// q/k/v/o + gate/up/down, output/v28_final 34M, 23/23 light battery).
-const V28BaseModelID = "Qwen/Qwen2.5-0.5B-Instruct"
+// ToolParserLLMBaseModelID is the base checkpoint the repair adapter was
+// trained from (Qwen/Qwen2.5-0.5B-Instruct; current adapter bundle is the
+// v28 flagship: LoRA r16 α32 on q/k/v/o + gate/up/down, 34M, 23/23 battery).
+const ToolParserLLMBaseModelID = "Qwen/Qwen2.5-0.5B-Instruct"
 
-// V28LoRAURL is the LoRA bundle distribution point. It ships as a zip
+// ToolParserLLMLoRAURL is the LoRA bundle distribution point. It ships as a zip
 // containing adapter_model.safetensors + adapter_config.json.
-// Override with V28_LORA_URL for mirrors / local test servers.
-const V28LoRAURL = "https://placeholder.com/lora-full.zip"
+// Public Kaggle dataset zip containing adapter_model.safetensors +
+// adapter_config.json. Override with TOOLPARSER_LLM_LORA_URL for mirrors /
+// local test servers. No auth needed (public dataset); plain HTTPS GET.
+const ToolParserLLMLoRAURL = "https://www.kaggle.com/api/v1/datasets/download/zoxoashouko/v28-flagship-toolparser"
 
-// V28LoRAExpectedFiles must be present at the top level (or one subdir deep)
+// ToolParserLLMLoRAExpectedFiles must be present at the top level (or one subdir deep)
 // of the unzipped bundle for the load to be accepted.
-var V28LoRAExpectedFiles = []string{"adapter_model.safetensors", "adapter_config.json"}
+var ToolParserLLMLoRAExpectedFiles = []string{"adapter_model.safetensors", "adapter_config.json"}
 
-// V28CanonicalSpec is the canonical-format specification sent to V28 with
+// ToolParserLLMCanonicalSpec is the canonical-format specification sent to
+// ToolParserLLM with
 // every repair request. It is derived from agent.go's constants so the model
 // and the validator can never drift apart.
-func V28CanonicalSpec() string {
+func ToolParserLLMCanonicalSpec() string {
 	return "Canonical tool-call format (copy character for character, no fences, no narration):\n" +
 		agentToolStart + "\n" +
 		agentCallSchema + "\n" +
@@ -67,41 +70,41 @@ func V28CanonicalSpec() string {
 
 // ── cache layout ───────────────────────────────────────────────────────────
 
-func v28CacheDir() string {
-	if d := strings.TrimSpace(os.Getenv("V28_CACHE_DIR")); d != "" {
+func toolParserLLMCacheDir() string {
+	if d := strings.TrimSpace(os.Getenv("TOOLPARSER_LLM_CACHE_DIR")); d != "" {
 		return d
 	}
 	if base, err := os.UserCacheDir(); err == nil && base != "" {
-		return filepath.Join(base, "glm-free-api", "v28")
+		return filepath.Join(base, "glm-free-api", "toolparser-llm")
 	}
-	return filepath.Join(".", "models", "v28")
+	return filepath.Join(".", "models", "toolparser-llm")
 }
 
-func v28LoRAURL() string {
-	if u := strings.TrimSpace(os.Getenv("V28_LORA_URL")); u != "" {
+func toolParserLLMLoRAURL() string {
+	if u := strings.TrimSpace(os.Getenv("TOOLPARSER_LLM_LORA_URL")); u != "" {
 		return u
 	}
-	return V28LoRAURL
+	return ToolParserLLMLoRAURL
 }
 
-func v28BaseRef() string {
-	if p := strings.TrimSpace(os.Getenv("V28_BASE_PATH")); p != "" {
+func toolParserLLMBaseRef() string {
+	if p := strings.TrimSpace(os.Getenv("TOOLPARSER_LLM_BASE_PATH")); p != "" {
 		return p
 	}
-	return V28BaseModelID
+	return ToolParserLLMBaseModelID
 }
 
-func v28SGLangAddr() string {
-	if a := strings.TrimSpace(os.Getenv("V28_SGLANG_ADDR")); a != "" {
+func toolParserLLMSGLangAddr() string {
+	if a := strings.TrimSpace(os.Getenv("TOOLPARSER_LLM_SGLANG_ADDR")); a != "" {
 		return a
 	}
 	return "127.0.0.1:30000"
 }
 
-// V28CachePaths returns (baseRef, loraDir, loraZip) for the current env.
-func V28CachePaths() (string, string, string) {
-	root := v28CacheDir()
-	return v28BaseRef(), filepath.Join(root, "lora"), filepath.Join(root, "lora-full.zip")
+// ToolParserLLMCachePaths returns (baseRef, loraDir, loraZip) for the current env.
+func ToolParserLLMCachePaths() (string, string, string) {
+	root := toolParserLLMCacheDir()
+	return toolParserLLMBaseRef(), filepath.Join(root, "lora"), filepath.Join(root, "lora-full.zip")
 }
 
 // ── hardware detection (§5.1) ──────────────────────────────────────────────
@@ -133,16 +136,16 @@ func DetectGPU() (bool, string) {
 
 // ── download + verify + cache (§5.2) ───────────────────────────────────────
 
-func v28FileExistsNonEmpty(p string) bool {
+func toolParserLLMFileExistsNonEmpty(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && !fi.IsDir() && fi.Size() > 0
 }
 
 // verifyLoRABundle checks the unzipped LoRA dir contains weights + config,
-// both non-empty, and that the config parses and names the V28 base model.
+// both non-empty, and that the config parses and names the base model.
 func verifyLoRABundle(dir string) error {
 	var missing []string
-	for _, f := range V28LoRAExpectedFiles {
+	for _, f := range ToolParserLLMLoRAExpectedFiles {
 		cands := []string{filepath.Join(dir, f)}
 		// Allow one subdir level (some zips wrap files in a folder).
 		entries, _ := os.ReadDir(dir)
@@ -153,7 +156,7 @@ func verifyLoRABundle(dir string) error {
 		}
 		ok := false
 		for _, c := range cands {
-			if v28FileExistsNonEmpty(c) {
+			if toolParserLLMFileExistsNonEmpty(c) {
 				ok = true
 				break
 			}
@@ -163,16 +166,16 @@ func verifyLoRABundle(dir string) error {
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("v28 LoRA bundle incomplete in %s: missing %v (expected %v); re-download from %s or set V28_LORA_PATH to a directory containing them",
-			dir, missing, V28LoRAExpectedFiles, v28LoRAURL())
+		return fmt.Errorf("ToolParserLLM LoRA bundle incomplete in %s: missing %v (expected %v); re-download from %s or set TOOLPARSER_LLM_LORA_PATH to a directory containing them",
+			dir, missing, ToolParserLLMLoRAExpectedFiles, toolParserLLMLoRAURL())
 	}
 	// Best-effort config sanity: must parse and carry LoRA metadata.
 	cfgPath := filepath.Join(dir, "adapter_config.json")
-	if !v28FileExistsNonEmpty(cfgPath) {
+	if !toolParserLLMFileExistsNonEmpty(cfgPath) {
 		entries, _ := os.ReadDir(dir)
 		for _, e := range entries {
 			if e.IsDir() {
-				if p := filepath.Join(dir, e.Name(), "adapter_config.json"); v28FileExistsNonEmpty(p) {
+				if p := filepath.Join(dir, e.Name(), "adapter_config.json"); toolParserLLMFileExistsNonEmpty(p) {
 					cfgPath = p
 					break
 				}
@@ -181,11 +184,11 @@ func verifyLoRABundle(dir string) error {
 	}
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
-		return fmt.Errorf("v28 LoRA config unreadable at %s: %w", cfgPath, err)
+		return fmt.Errorf("ToolParserLLM LoRA config unreadable at %s: %w", cfgPath, err)
 	}
 	var cfg map[string]interface{}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return fmt.Errorf("v28 LoRA config at %s is not valid JSON: %w", cfgPath, err)
+		return fmt.Errorf("ToolParserLLM LoRA config at %s is not valid JSON: %w", cfgPath, err)
 	}
 	return nil
 }
@@ -197,11 +200,11 @@ func downloadFile(ctx context.Context, url, dst string) error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("GET %s failed: %w — check network/proxy and V28_LORA_URL", url, err)
+		return fmt.Errorf("GET %s failed: %w — check network/proxy and TOOLPARSER_LLM_LORA_URL", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s returned %s — check V28_LORA_URL / network", url, resp.Status)
+		return fmt.Errorf("GET %s returned %s — check TOOLPARSER_LLM_LORA_URL / network", url, resp.Status)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
@@ -272,24 +275,26 @@ func unzipFile(zipPath, destDir string) error {
 	return nil
 }
 
-// EnsureV28Assets downloads (if needed) and verifies BOTH components:
-//  1. Base model reference (V28_BASE_PATH local dir or V28BaseModelID HF id;
+// EnsureToolParserLLMAssets downloads (if needed) and verifies BOTH components:
+//  1. Base model reference (TOOLPARSER_LLM_BASE_PATH local dir or
+//     ToolParserLLMBaseModelID HF id;
 //     a local dir must exist; a remote id is resolved by SGLang at load and
 //     its reachability is preflighted here with an actionable error).
-//  2. LoRA bundle zip from V28_LORA_URL (or V28_LORA_PATH override),
+//  2. LoRA bundle zip from TOOLPARSER_LLM_LORA_URL (or
+//     TOOLPARSER_LLM_LORA_PATH override),
 //     unzipped to the cache dir and verified to contain weights + config.
 //
 // Results are cached: subsequent runs skip re-fetch when the verified marker
 // exists and the bundle still verifies. Failures are loud and actionable.
-func EnsureV28Assets(ctx context.Context) (baseRef, loraDir string, err error) {
-	baseRef, loraDir, zipPath := V28CachePaths()
+func EnsureToolParserLLMAssets(ctx context.Context) (baseRef, loraDir string, err error) {
+	baseRef, loraDir, zipPath := ToolParserLLMCachePaths()
 
 	// Local overrides for air-gapped / dev machines (e.g. the toolparser
 	// checkout at /root/toolparser/output/v28_final).
-	if lp := strings.TrimSpace(os.Getenv("V28_LORA_PATH")); lp != "" {
+	if lp := strings.TrimSpace(os.Getenv("TOOLPARSER_LLM_LORA_PATH")); lp != "" {
 		fi, statErr := os.Stat(lp)
 		if statErr != nil {
-			return "", "", fmt.Errorf("V28_LORA_PATH=%s not found: %w", lp, statErr)
+			return "", "", fmt.Errorf("TOOLPARSER_LLM_LORA_PATH=%s not found: %w", lp, statErr)
 		}
 		if fi.IsDir() {
 			if verr := verifyLoRABundle(lp); verr != nil {
@@ -298,19 +303,19 @@ func EnsureV28Assets(ctx context.Context) (baseRef, loraDir string, err error) {
 			return baseRef, lp, nil
 		}
 		// Single file: must be the zip itself.
-		loraDir = filepath.Join(v28CacheDir(), "lora-override")
+		loraDir = filepath.Join(toolParserLLMCacheDir(), "lora-override")
 		zipPath = lp
 	}
-	if bp := strings.TrimSpace(os.Getenv("V28_BASE_PATH")); bp != "" {
+	if bp := strings.TrimSpace(os.Getenv("TOOLPARSER_LLM_BASE_PATH")); bp != "" {
 		if st, serr := os.Stat(bp); serr != nil || !st.IsDir() {
-			return "", "", fmt.Errorf("V28_BASE_PATH=%s is not a readable directory: %v — unset it to use HF id %s", bp, serr, V28BaseModelID)
+			return "", "", fmt.Errorf("TOOLPARSER_LLM_BASE_PATH=%s is not a readable directory: %v — unset it to use HF id %s", bp, serr, ToolParserLLMBaseModelID)
 		}
 		baseRef = bp
 	}
 
 	// Fast path: cached bundle already verified.
 	marker := filepath.Join(loraDir, ".verified")
-	if v28FileExistsNonEmpty(marker) {
+	if toolParserLLMFileExistsNonEmpty(marker) {
 		if verr := verifyLoRABundle(loraDir); verr == nil {
 			return baseRef, loraDir, nil
 		}
@@ -319,46 +324,46 @@ func EnsureV28Assets(ctx context.Context) (baseRef, loraDir string, err error) {
 
 	// Base-model preflight: a local dir must exist; a remote HF id needs
 	// SGLang/HF reachability (checked at load; warn early here).
-	if baseRef != V28BaseModelID {
+	if baseRef != ToolParserLLMBaseModelID {
 		if st, serr := os.Stat(baseRef); serr != nil || !st.IsDir() {
-			return "", "", fmt.Errorf("v28 base model path %s unreadable: %v — set V28_BASE_PATH to a HF snapshot dir or unset it to use %s", baseRef, serr, V28BaseModelID)
+			return "", "", fmt.Errorf("v28 base model path %s unreadable: %v — set TOOLPARSER_LLM_BASE_PATH to a HF snapshot dir or unset it to use %s", baseRef, serr, ToolParserLLMBaseModelID)
 		}
 	}
 
 	// LoRA bundle: single-file override short-circuits the download.
 	needsDownload := true
-	if zp := strings.TrimSpace(os.Getenv("V28_LORA_PATH")); zp != "" {
+	if zp := strings.TrimSpace(os.Getenv("TOOLPARSER_LLM_LORA_PATH")); zp != "" {
 		if st, serr := os.Stat(zp); serr == nil && !st.IsDir() && st.Size() > 0 {
 			zipPath = zp
 			needsDownload = false
 		}
 	}
-	if needsDownload && v28FileExistsNonEmpty(zipPath) {
+	if needsDownload && toolParserLLMFileExistsNonEmpty(zipPath) {
 		// A previous download exists — reuse it unless a checksum is pinned
 		// and mismatches (integrity gate below re-checks).
 		needsDownload = false
 		// Honour explicit refresh requests.
-		if strings.EqualFold(strings.TrimSpace(os.Getenv("V28_REFRESH")), "1") {
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("TOOLPARSER_LLM_REFRESH")), "1") {
 			needsDownload = true
 		}
 	}
 	if needsDownload {
-		url := v28LoRAURL()
-		log.Printf("[V28] downloading LoRA bundle from %s ...", url)
+		url := toolParserLLMLoRAURL()
+		log.Printf("[ToolParserLLM] downloading LoRA bundle from %s ...", url)
 		dctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
 		if derr := downloadFile(dctx, url, zipPath); derr != nil {
-			return "", "", fmt.Errorf("v28 LoRA download failed: %w", derr)
+			return "", "", fmt.Errorf("ToolParserLLM LoRA download failed: %w", derr)
 		}
 	}
 	fi, err := os.Stat(zipPath)
 	if err != nil || fi.Size() == 0 {
-		return "", "", fmt.Errorf("v28 LoRA zip missing or empty at %s (wanted bundle from %s) — check download / V28_LORA_PATH", zipPath, v28LoRAURL())
+		return "", "", fmt.Errorf("ToolParserLLM LoRA zip missing or empty at %s (wanted bundle from %s) — check download / TOOLPARSER_LLM_LORA_PATH", zipPath, toolParserLLMLoRAURL())
 	}
-	log.Printf("[V28] LoRA zip %s (%d bytes)", zipPath, fi.Size())
+	log.Printf("[ToolParserLLM] LoRA zip %s (%d bytes)", zipPath, fi.Size())
 
 	// Integrity gate: optional pinned SHA256, always size/non-empty.
-	if want := strings.TrimSpace(os.Getenv("V28_LORA_SHA256")); want != "" {
+	if want := strings.TrimSpace(os.Getenv("TOOLPARSER_LLM_LORA_SHA256")); want != "" {
 		raw, rerr := os.ReadFile(zipPath)
 		if rerr != nil {
 			return "", "", fmt.Errorf("read LoRA zip for checksum: %w", rerr)
@@ -366,50 +371,50 @@ func EnsureV28Assets(ctx context.Context) (baseRef, loraDir string, err error) {
 		sum := sha256.Sum256(raw)
 		got := hex.EncodeToString(sum[:])
 		if !strings.EqualFold(got, want) {
-			return "", "", fmt.Errorf("v28 LoRA checksum mismatch: got %s want %s — refusing corrupt bundle (delete %s and retry)", got, want, zipPath)
+			return "", "", fmt.Errorf("ToolParserLLM LoRA checksum mismatch: got %s want %s — refusing corrupt bundle (delete %s and retry)", got, want, zipPath)
 		}
-		log.Printf("[V28] LoRA SHA256 verified (%s)", got[:16]+"…")
+		log.Printf("[ToolParserLLM] LoRA SHA256 verified (%s)", got[:16]+"…")
 	}
 
 	if err := os.MkdirAll(loraDir, 0o755); err != nil {
 		return "", "", err
 	}
 	if uerr := unzipFile(zipPath, loraDir); uerr != nil {
-		return "", "", fmt.Errorf("v28 LoRA unzip failed: %w", uerr)
+		return "", "", fmt.Errorf("ToolParserLLM LoRA unzip failed: %w", uerr)
 	}
 	if verr := verifyLoRABundle(loraDir); verr != nil {
 		return "", "", verr
 	}
 	_ = os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"+zipPath+"\n"), 0o644)
-	log.Printf("[V28] LoRA bundle verified in %s (weights + config present)", loraDir)
+	log.Printf("[ToolParserLLM] LoRA bundle verified in %s (weights + config present)", loraDir)
 	return baseRef, loraDir, nil
 }
 
 // ── SGLang serving ─────────────────────────────────────────────────────────
 
-var v28SGLangCmd *exec.Cmd
-var v28SGLangBaseURL string
+var toolParserLLMSGLangCmd *exec.Cmd
+var toolParserLLMSGLangBaseURL string
 
-// V28SGLangBaseURL returns the configured SGLang HTTP base URL
-// (http://V28_SGLANG_ADDR), or "" when SGLang was never started.
-func V28SGLangBaseURL() string { return v28SGLangBaseURL }
+// ToolParserLLMSGLangBaseURL returns the configured SGLang HTTP base URL
+// (http://TOOLPARSER_LLM_SGLANG_ADDR), or "" when SGLang was never started.
+func ToolParserLLMSGLangBaseURL() string { return toolParserLLMSGLangBaseURL }
 
-// StartSGLangWithV28 launches `python3 -m sglang.launch_server` serving the
-// base model plus the V28 LoRA adapter, then waits for readiness.
-// It is called ONLY from EnsureV28ForUltra (ultra mode startup).
-func StartSGLangWithV28(ctx context.Context, baseRef, loraDir string) error {
-	addr := v28SGLangAddr()
+// StartSGLangWithToolParserLLM launches `python3 -m sglang.launch_server` serving the
+// base model plus the ToolParserLLM LoRA adapter, then waits for readiness.
+// It is called ONLY from EnsureToolParserLLMForUltra (ultra mode startup).
+func StartSGLangWithToolParserLLM(ctx context.Context, baseRef, loraDir string) error {
+	addr := toolParserLLMSGLangAddr()
 	host, port := "127.0.0.1", "30000"
 	if h, p, ok := strings.Cut(addr, ":"); ok && h != "" && p != "" {
 		host, port = h, p
 	}
-	py := strings.TrimSpace(os.Getenv("V28_PYTHON"))
+	py := strings.TrimSpace(os.Getenv("TOOLPARSER_LLM_PYTHON"))
 	if py == "" {
 		py = "python3"
 	}
 	args := []string{"-m", "sglang.launch_server",
 		"--model-path", baseRef,
-		"--lora-paths", "v28=" + loraDir,
+		"--lora-paths", "toolparserllm=" + loraDir,
 		"--host", host, "--port", port,
 	}
 	if hasGPU, _ := DetectGPU(); !hasGPU {
@@ -417,16 +422,16 @@ func StartSGLangWithV28(ctx context.Context, baseRef, loraDir string) error {
 		// and required --force-cpu; pass through to a CPU device.
 		args = append(args, "--device", "cpu")
 	}
-	log.Printf("[V28] starting SGLang: %s %s", py, strings.Join(args, " "))
+	log.Printf("[ToolParserLLM] starting SGLang: %s %s", py, strings.Join(args, " "))
 	cmd := exec.CommandContext(context.Background(), py, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start SGLang failed (%s %s): %w — install with `pip install \"sglang[all]\"` and ensure %s is on PATH", py, strings.Join(args, " "), err, py)
 	}
-	v28SGLangCmd = cmd
+	toolParserLLMSGLangCmd = cmd
 	base := "http://" + host + ":" + port
-	v28SGLangBaseURL = base
+	toolParserLLMSGLangBaseURL = base
 
 	// Readiness poll: /health, falling back to /v1/models.
 	deadline := time.Now().Add(5 * time.Minute)
@@ -443,7 +448,7 @@ func StartSGLangWithV28(ctx context.Context, baseRef, loraDir string) error {
 				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
 				if resp.StatusCode < 500 {
-					log.Printf("[V28] SGLang ready at %s (base=%s lora=v28)", base, baseRef)
+					log.Printf("[ToolParserLLM] SGLang ready at %s (base=%s lora=toolparserllm)", base, baseRef)
 					return nil
 				}
 			}
@@ -453,57 +458,60 @@ func StartSGLangWithV28(ctx context.Context, baseRef, loraDir string) error {
 	return fmt.Errorf("SGLang at %s did not become ready in 5m — check `pip show sglang`, GPU/CPU flags, and SGLang logs above", base)
 }
 
-// EnsureV28ForUltra is the ONLY startup entry point for V28. Callers must
+// EnsureToolParserLLMForUltra is the ONLY startup entry point for
+// ToolParserLLM. Callers must
 // gate on UltraRepairEnabled() first (Run does). It enforces the §5.1
 // hardware policy, ensures both model components (§5.2), and loads them via
 // SGLang — all with loud, actionable failures.
-func EnsureV28ForUltra(ctx context.Context) error {
+func EnsureToolParserLLMForUltra(ctx context.Context) error {
 	hasGPU, evidence := DetectGPU()
 	if !hasGPU && !config.ForceCPU {
 		// §5.1: CPU inference is NOT recommended — abort unless --force-cpu.
-		return fmt.Errorf("v28 ultra mode requires a GPU for SGLang, but none was detected (%s). "+
+		return fmt.Errorf("ToolParserLLM ultra mode requires a GPU for SGLang, but none was detected (%s). "+
 			"CPU inference is NOT recommended (Qwen2.5-0.5B LoRA is ~10-50x slower on CPU and may time out agent requests). "+
 			"Aborting startup. Either run on a GPU host, or pass --force-cpu (env FORCE_CPU=1) to accept the degraded CPU path", evidence)
 	}
 	if !hasGPU {
-		log.Printf("[V28] WARNING: no GPU detected (%s) — CPU inference is NOT recommended and will be slow. Proceeding only because --force-cpu was passed (degraded path).", evidence)
-		log.Printf("[V28] WARNING (repeat): ultra repair latency on CPU may exceed agent timeouts; prefer a GPU host with SGLang.")
+		log.Printf("[ToolParserLLM] WARNING: no GPU detected (%s) — CPU inference is NOT recommended and will be slow. Proceeding only because --force-cpu was passed (degraded path).", evidence)
+		log.Printf("[ToolParserLLM] WARNING (repeat): ultra repair latency on CPU may exceed agent timeouts; prefer a GPU host with SGLang.")
 	} else {
-		log.Printf("[V28] GPU detected (%s) — serving V28 via SGLang.", evidence)
+		log.Printf("[ToolParserLLM] GPU detected (%s) — serving ToolParserLLM via SGLang.", evidence)
 	}
-	baseRef, loraDir, err := EnsureV28Assets(ctx)
+	baseRef, loraDir, err := EnsureToolParserLLMAssets(ctx)
 	if err != nil {
 		return err
 	}
-	if err := StartSGLangWithV28(ctx, baseRef, loraDir); err != nil {
+	if err := StartSGLangWithToolParserLLM(ctx, baseRef, loraDir); err != nil {
 		return err
 	}
-	// Install the SGLang-backed repairer so request handlers can reach V28.
+	// Install the SGLang-backed repairer so request handlers can reach
+// ToolParserLLM.
 	// Ultra-gated callers only (RepairUltraBuffer checks the gate again).
-	v28Repairer = NewSGLangRepairer(V28SGLangBaseURL())
+	toolParserLLMRepairer = NewToolParserSGLangRepairer(ToolParserLLMSGLangBaseURL())
 	return nil
 }
 
 // ── repair client (SGLang HTTP) ────────────────────────────────────────────
 
-// V28Repairer repairs ONE extracted malformed fragment into canonical text.
+// ToolParserLLMRepairer repairs ONE extracted malformed fragment into canonical text.
 // Implementations must be side-effect free and return the model's raw text
 // (the ultra pipeline re-validates before splicing).
-type V28Repairer interface {
+type ToolParserLLMRepairer interface {
 	RepairFragment(ctx context.Context, fragment, toolsJSON string) (string, error)
 }
 
-var v28Repairer V28Repairer
+var toolParserLLMRepairer ToolParserLLMRepairer
 
-// GetV28Repairer returns the active repair backend, or nil when V28 is
+// GetToolParserLLMRepairer returns the active repair backend, or nil when
+// ToolParserLLM is
 // dormant / not loaded (callers must fall back to passthrough + warning).
-func GetV28Repairer() V28Repairer { return v28Repairer }
+func GetToolParserLLMRepairer() ToolParserLLMRepairer { return toolParserLLMRepairer }
 
-// SetV28RepairerForTests installs a fake repairer and returns a restore func.
-func SetV28RepairerForTests(r V28Repairer) func() {
-	prev := v28Repairer
-	v28Repairer = r
-	return func() { v28Repairer = prev }
+// SetToolParserLLMRepairerForTests installs a fake repairer and returns a restore func.
+func SetToolParserLLMRepairerForTests(r ToolParserLLMRepairer) func() {
+	prev := toolParserLLMRepairer
+	toolParserLLMRepairer = r
+	return func() { toolParserLLMRepairer = prev }
 }
 
 // sglangRepairer shells repair prompts to the SGLang /generate endpoint.
@@ -512,21 +520,22 @@ type sglangRepairer struct {
 	client  *http.Client
 }
 
-// NewSGLangRepairer builds the default SGLang-backed repairer.
-func NewSGLangRepairer(baseURL string) V28Repairer {
+// NewToolParserSGLangRepairer builds the default SGLang-backed repairer.
+func NewToolParserSGLangRepairer(baseURL string) ToolParserLLMRepairer {
 	return &sglangRepairer{baseURL: strings.TrimRight(baseURL, "/"), client: &http.Client{Timeout: 60 * time.Second}}
 }
 
-// V28RepairPrompt builds the exact prompt sent to V28: canonical spec +
+// ToolParserLLMRepairPrompt builds the exact prompt sent to ToolParserLLM:
+// canonical spec +
 // available tools + the EXTRACTED fragment only (never the whole response).
-func V28RepairPrompt(fragment, toolsJSON string) string {
+func ToolParserLLMRepairPrompt(fragment, toolsJSON string) string {
 	tools := strings.TrimSpace(toolsJSON)
 	if tools == "" {
 		tools = "(no tools provided)"
 	}
 	return "You are a tool-call normalizer. " +
 		"Given AVAILABLE TOOLS and a MALFORMED tool-call fragment, output ONLY one canonical block, no fences, no narration.\n" +
-		V28CanonicalSpec() + "\n" +
+		ToolParserLLMCanonicalSpec() + "\n" +
 		"<tools>\n" + tools + "\n</tools>\n" +
 		"<malformed>\n" + fragment + "\n</malformed>\n" +
 		"Rules: infer the lowercased tool name from the fragment; keep arguments VERBATIM; emit ONLY keys present; " +
@@ -534,11 +543,11 @@ func V28RepairPrompt(fragment, toolsJSON string) string {
 }
 
 func (s *sglangRepairer) RepairFragment(ctx context.Context, fragment, toolsJSON string) (string, error) {
-	prompt := V28RepairPrompt(fragment, toolsJSON)
+	prompt := ToolParserLLMRepairPrompt(fragment, toolsJSON)
 	body, _ := json.Marshal(map[string]interface{}{
 		"text":                prompt,
 		"sampling_params":     map[string]interface{}{"temperature": 0, "max_new_tokens": 500},
-		"lora_path":           "v28",
+		"lora_path":           "toolparserllm",
 		"return_logprob":      false,
 		"stream":              false,
 	})

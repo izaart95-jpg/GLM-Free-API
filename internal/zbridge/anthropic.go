@@ -610,7 +610,7 @@ func anthropicStreamResponse(w http.ResponseWriter, prompt string, opts SendOpti
     var ultraBuf *UltraBuffer
     if config.AgentMode {
         if UltraRepairEnabled() {
-            // §3: ultra buffers the stream for validator + V28 repair.
+            // §3: ultra buffers the stream for validator + ToolParserLLM repair.
             ultraBuf = NewUltraBuffer(opts.ToolsRaw)
         } else {
             interceptor = newAgentInterceptor()
@@ -829,7 +829,7 @@ func anthropicNonStreamResponse(w http.ResponseWriter, prompt string, opts SendO
 
     if config.AgentMode {
         if UltraRepairEnabled() {
-            // §4: repair malformed spans before parsing (valid bypasses V28).
+            // §4: repair malformed spans before parsing (valid bypasses ToolParserLLM).
             fullContent = UltraRepairFullText(fullContent, opts.ToolsRaw)
         }
         toolCalls := agentExtractToolCalls(fullContent)

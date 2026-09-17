@@ -1,6 +1,6 @@
-// agent_ultra_test.go — V28 ultra repair pipeline (§8 acceptance).
+// agent_ultra_test.go — ultra repair pipeline (§8 acceptance).
 //
-// Covers: strict opt-in gating, buffering only in ultra, valid bypass of V28,
+// Covers: strict opt-in gating, buffering only in ultra, valid bypass of the model,
 // fragment-only extraction, re-validation before splicing, idempotence,
 // multi-span independence, fallback preservation, and dormancy
 // (non-ultra byte-identical).
@@ -82,7 +82,7 @@ func TestUltraGateMatrixExplicit(t *testing.T) {
 		defer r()
 		return UltraRepairEnabled()
 	}() {
-		t.Error("--agent-mode only must be dormant (no V28)")
+		t.Error("--agent-mode only must be dormant (no model)")
 	}
 	if func() bool {
 		r := withUltraGate(true, "ultra", false)
@@ -93,9 +93,9 @@ func TestUltraGateMatrixExplicit(t *testing.T) {
 	}
 }
 
-// ── validator: valid bypasses V28 (§3, §8) ─────────────────────────────────
+// ── validator: valid bypasses ToolParserLLM (§3, §8) ─────────────────────────────────
 
-func TestUltraValidCanonicalBypassesV28(t *testing.T) {
+func TestUltraValidCanonicalBypassesModel(t *testing.T) {
 	restore := withUltraGate(true, "ultra", true)
 	defer restore()
 	valid := "Checking.\n<<<TOOL_CALL>>>\n{\"name\":\"bash\",\"arguments\":{\"command\":\"uname -a\"}}\n<<<END_TOOL_CALL>>>\n"
@@ -108,7 +108,7 @@ func TestUltraValidCanonicalBypassesV28(t *testing.T) {
 		t.Errorf("valid input altered:\n got %q\nwant %q", got, valid)
 	}
 	if f.calls != 0 {
-		t.Errorf("V28 invoked %d times for valid input, want 0 (bypass)", f.calls)
+		t.Errorf("model invoked %d times for valid input, want 0 (bypass)", f.calls)
 	}
 	if len(events) != 1 || events[0].Decision != "passthrough-valid" {
 		t.Errorf("events = %+v, want single passthrough-valid", events)
@@ -125,7 +125,7 @@ func TestUltraPlainPassthrough(t *testing.T) {
 	f := &fakeRepairer{reply: "NO"}
 	got, _ := RepairUltraBuffer(plain, ultraTools, f)
 	if got != plain || f.calls != 0 {
-		t.Errorf("plain altered or V28 called (got %q calls=%d)", got, f.calls)
+		t.Errorf("plain altered or model called (got %q calls=%d)", got, f.calls)
 	}
 }
 
@@ -175,10 +175,10 @@ func TestUltraMalformedRepairedAndSpliced(t *testing.T) {
 	f := &fakeRepairer{reply: "<<<TOOL_CALL>>>\n{\"name\":\"bash\",\"arguments\":{\"command\":\"uname -a\"}}\n<<<END_TOOL_CALL>>>"}
 	got, events := RepairUltraBuffer(full, ultraTools, f)
 	if f.calls != 1 {
-		t.Fatalf("V28 calls = %d, want 1", f.calls)
+		t.Fatalf("model calls = %d, want 1", f.calls)
 	}
 	if strings.Contains(f.lastFrag, "Working on it") || strings.Contains(f.lastFrag, "Done soon") {
-		t.Errorf("whole response forwarded to V28 (fragment=%q)", f.lastFrag)
+		t.Errorf("whole response forwarded to model (fragment=%q)", f.lastFrag)
 	}
 	if !strings.Contains(got, "<<<TOOL_CALL>>>") || !strings.Contains(got, `"command":"uname -a"`) {
 		t.Errorf("repaired block missing: %q", got)
@@ -192,7 +192,7 @@ func TestUltraMalformedRepairedAndSpliced(t *testing.T) {
 	if len(events) != 1 || events[0].Decision != "repaired" {
 		t.Errorf("events = %+v, want single repaired", events)
 	}
-	if events[0].OriginalFragment == "" || events[0].ExtractedFragment == "" || events[0].V28Output == "" {
+	if events[0].OriginalFragment == "" || events[0].ExtractedFragment == "" || events[0].ModelOutput == "" {
 		t.Errorf("repair event missing fields: %+v", events[0])
 	}
 	// Postcondition: repaired text validates with the SAME validator.
@@ -201,14 +201,14 @@ func TestUltraMalformedRepairedAndSpliced(t *testing.T) {
 	}
 }
 
-func TestUltraInvalidV28OutputFallsBack(t *testing.T) {
+func TestUltraInvalidModelOutputFallsBack(t *testing.T) {
 	restore := withUltraGate(true, "ultra", true)
 	defer restore()
 	full := "Hi.\n<tool_call>{\"tool\": \"bash\", \"command\": \"id\"}</tool_call>\nBye."
 	f := &fakeRepairer{reply: "not a tool call at all"}
 	got, events := RepairUltraBuffer(full, ultraTools, f)
 	if got != full {
-		t.Errorf("invalid V28 output must keep original (got %q want %q)", got, full)
+		t.Errorf("invalid model output must keep original (got %q want %q)", got, full)
 	}
 	if len(events) != 1 || events[0].Decision != "fallback-invalid" {
 		t.Errorf("events = %+v, want fallback-invalid", events)
@@ -247,7 +247,7 @@ func TestUltraRepairIdempotent(t *testing.T) {
 		t.Errorf("not idempotent:\n once %q\ntwice %q", once, twice)
 	}
 	if f2.calls != 0 {
-		t.Errorf("second pass invoked V28 %d times (repaired text must bypass)", f2.calls)
+		t.Errorf("second pass invoked ToolParserLLM %d times (repaired text must bypass)", f2.calls)
 	}
 }
 
@@ -268,7 +268,7 @@ func TestUltraMultipleSpansIndependent(t *testing.T) {
 	_ = f
 	got, events := RepairUltraBuffer(full, ultraTools, wrapped)
 	if calls != 2 {
-		t.Errorf("V28 calls = %d, want 2 (one per span)", calls)
+		t.Errorf("model calls = %d, want 2 (one per span)", calls)
 	}
 	if len(events) != 2 {
 		t.Errorf("events = %d, want 2", len(events))
@@ -292,7 +292,7 @@ func (r *routeRepairer) RepairFragment(_ context.Context, frag, _ string) (strin
 func TestUltraBufferDefersUntilFinish(t *testing.T) {
 	restore := withUltraGate(true, "ultra", true)
 	defer restore()
-	restoreR := SetV28RepairerForTests(&fakeRepairer{reply: "<<<TOOL_CALL>>>\n{\"name\":\"bash\",\"arguments\":{\"command\":\"id\"}}\n<<<END_TOOL_CALL>>>"})
+	restoreR := SetToolParserLLMRepairerForTests(&fakeRepairer{reply: "<<<TOOL_CALL>>>\n{\"name\":\"bash\",\"arguments\":{\"command\":\"id\"}}\n<<<END_TOOL_CALL>>>"})
 	defer restoreR()
 	tools, _ := json.Marshal([]openAITool{{Type: "function", Function: &openAIFnSpec{Name: "bash"}}})
 	b := NewUltraBuffer(tools)
@@ -323,7 +323,7 @@ func TestUltraBufferValidPassthrough(t *testing.T) {
 	}
 }
 
-// ── dormancy: non-ultra never touches V28 (§6) ─────────────────────────────
+// ── dormancy: non-ultra never touches the model (§6) ─────────────────────────────
 
 func TestUltraDormantWhenNotEnabled(t *testing.T) {
 	malformed := "Hi.\n<tool_call>{\"tool\": \"bash\", \"command\": \"id\"}</tool_call>\nBye."
@@ -340,7 +340,7 @@ func TestUltraDormantWhenNotEnabled(t *testing.T) {
 			t.Errorf("agent=%v level=%q altered input (non-regression breach)", tc.agent, tc.level)
 		}
 		if f.calls != 0 {
-			t.Errorf("agent=%v level=%q invoked V28 (must stay dormant)", tc.agent, tc.level)
+			t.Errorf("agent=%v level=%q invoked ToolParserLLM (must stay dormant)", tc.agent, tc.level)
 		}
 		if UltraRepairFullText(malformed, json.RawMessage(ultraTools)) != malformed {
 			t.Errorf("agent=%v level=%q UltraRepairFullText altered input", tc.agent, tc.level)
