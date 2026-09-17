@@ -112,6 +112,8 @@ On startup a banner shows the health URL, endpoints, and auth token. The Z.AI se
 | `--verbose` | `false` | Verbose captcha/debug logging (captcha-subsystem `logInfo`/`logError` are silent otherwise) |
 | `--agent-mode` | `false` | Enable agent mode (tools/role translation; starts the background captcha cache) |
 | `--agent-mode-variant` | `modern` | Agent shim: `modern` (recommended) or `legacy` |
+| `--agent-mode-level` | *(empty)* | Agent repair level: empty (default, stock parser only) or `ultra` (buffer + ToolParserLLM malformed-tool repair; requires `--agent-mode`) |
+| `--force-cpu` | `false` | Allow ToolParserLLM ultra repair on CPU-only hosts (degraded path; CPU inference is NOT recommended, GPU+SGLang is required otherwise) |
 | `--sync-mode` | `false` | Legacy synchronous flow: fresh chat per request instead of the pre-warmed pool (still GC'd) |
 
 ### Environment Variables
@@ -125,6 +127,16 @@ On startup a banner shows the health URL, endpoints, and auth token. The Z.AI se
 | `ZAI_TOKEN` | *(empty)* | Hardcoded Z.AI JWT — skips guest initialization |
 | `AGENT_MODE` | `false` | Enable agent mode (`1`/`true`/`yes`/`on`/`modern` → modern shim, `legacy` → legacy shim) |
 | `AGENT_MODE_VARIANT` | `modern` | Shim variant override (`modern`/`legacy`; takes precedence over `AGENT_MODE`'s implicit variant) |
+| `AGENT_MODE_LEVEL` | *(empty)* | Agent repair level (`ultra` enables ToolParserLLM repair; requires `AGENT_MODE`) |
+| `FORCE_CPU` / `TOOLPARSER_LLM_FORCE_CPU` | `false` | Accept the degraded CPU inference path for ToolParserLLM ultra mode on GPU-less hosts |
+| `TOOLPARSER_LLM_CACHE_DIR` | OS cache / `./models/toolparser-llm` | Where the base-model reference and LoRA bundle are cached |
+| `TOOLPARSER_LLM_LORA_URL` | public Kaggle dataset zip | Override for the LoRA bundle download (adapter weights + config) |
+| `TOOLPARSER_LLM_LORA_PATH` | *(empty)* | Local LoRA bundle override: directory containing `adapter_model.safetensors` + `adapter_config.json`, or a zip file (skips download; air-gapped friendly) |
+| `TOOLPARSER_LLM_BASE_PATH` | *(empty)* | Local base-model snapshot dir (unset = resolve `Qwen/Qwen2.5-0.5B-Instruct` via SGLang/HF) |
+| `TOOLPARSER_LLM_SGLANG_ADDR` | `127.0.0.1:30000` | Address the SGLang server is started on / reached at |
+| `TOOLPARSER_LLM_LORA_SHA256` | *(empty)* | Optional pinned SHA256 for the downloaded LoRA zip (mismatch aborts) |
+| `TOOLPARSER_LLM_REFRESH` | *(empty)* | Set to `1` to force re-download of the LoRA bundle despite a valid cache |
+| `TOOLPARSER_LLM_PYTHON` | `python3` | Python executable used to launch SGLang |
 | `LOG_LEVEL` | `debug` | `debug` dumps every Z.AI request/response, SSE lines, and headers |
 | `LOG_FORMAT` | `text` | Log format |
 | `STREAM_HOLDBACK` | `24` | Runes held back at a live stream's tail to absorb Z.AI `edit_content` backtracks before they reach the client (`0` disables; issue #23) |
@@ -346,6 +358,10 @@ Z.AI's unofficial `/api/v2/chat/completions` only accepts `role="user"` messages
 **Streamed tool calls** — with `stream: true`, tool calls stream live like the OpenAI/Anthropic APIs: as soon as a block's `{"name": …, "arguments": {` has arrived, the client receives the header delta (`index`, `id`, `type`, `function.name`), then incremental `function.arguments` fragments (`input_json_delta` on Anthropic) while the model is still writing the JSON, closing with `finish_reason="tool_calls"` / `stop_reason="tool_use"`. There is no silent buffer window between the markers. Non-streamable shapes (arguments as a JSON-encoded string, flat payloads) still emit one complete buffered call; fragments are rune-safe, so markers and multi-byte characters split across upstream SSE chunks never garble or leak.
 
 **Legacy shim (opt-in)** — `--agent-mode-variant=legacy` / `AGENT_MODE_VARIANT=legacy`: prepends a system-prefix user message, rewrites every non-user message as `[ROLE: <role>] ...`, and renders tools into a strict `<<<TOOL_CALL>>> {"name":...,"arguments":{...}} <<<END_TOOL_CALL>>>` contract.
+
+**Ultra repair (opt-in beta, issue #44)** — `--agent-mode --agent-mode-level=ultra`: when long-horizon sessions rot the model's output and it emits a paraphrased envelope (`TOOL_CALL_BLOCK`, `<tool_call>`, fenced or flat payloads…) instead of the canonical block, a small Text-to-Tool-Call model (ToolParserLLM: Qwen2.5-0.5B-Instruct + LoRA adapter) repairs it. Pipeline per response: buffer the stream → validate against the canonical format → valid blocks pass through untouched (the repair model is never consulted) → each malformed span is isolated (surrounding prose excluded), de-noised, VAR-patched for long values (spans ≥150 chars, or ≥50 with a newline, become `VARn` sentinels and are rehydrated verbatim after), and sent to the model with the canonical spec → its output is re-validated before splicing; on any failure the original fragment is forwarded with a warning, never silently dropped. Repair is idempotent and per-span independent; every event is logged (original / extracted / model output / decision). Dormant otherwise: without *both* flags nothing is loaded, warmed up, or referenced, and default + plain `--agent-mode` behavior is byte-for-byte unchanged.
+
+Model serving: at ultra startup the bridge downloads the base-model reference and the LoRA bundle (public Kaggle dataset `zoxoashouko/v28-flagship-toolparser`: `adapter_model.safetensors` + `adapter_config.json`), verifies integrity (non-empty zip, optional pinned SHA256, weights+config present and valid JSON), caches under `TOOLPARSER_LLM_CACHE_DIR`, and loads base+LoRA via SGLang. GPU hosts serve automatically; CPU-only hosts abort with an actionable error unless `--force-cpu` / `FORCE_CPU=1` is passed (documented degraded path — slow, may exceed agent timeouts). Failures are loud: bad checksum, incomplete bundle, or an SGLang that never becomes ready all abort startup with what to check. `TOOLPARSER_LLM_LORA_PATH` / `TOOLPARSER_LLM_BASE_PATH` allow fully local/air-gapped setups.
 
 Enabling agent mode also starts the background captcha cache (2 pre-generated params, 75 s TTL, pauses after 3 min idle).
 
