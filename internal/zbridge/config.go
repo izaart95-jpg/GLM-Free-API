@@ -72,10 +72,10 @@ type Config struct {
     // Holding back a small window lets ordinary trailing backtracks be
     // absorbed invisibly. 0 disables the hold-back. See issue #23.
     StreamHoldback int
-    // SyncMode disables the async session pool and restores the legacy
-    // synchronous flow: every request creates its own chat session first.
-    // Used sessions are still deleted on Z.AI after each response
-    // (throwaway sessions either way — see session_pool.go).
+    // SyncMode disables the async session pool and reuses one sticky session
+    // instead (up to SESSION_REUSE_COUNT requests before delete + rotate).
+    // Used sessions are still deleted on Z.AI after their reuse limit
+    // (reused sessions either way — see session_pool.go).
     SyncMode bool
     // SessionPoolSize is the standing batch of pre-made ready chat sessions
     // kept by the async session pool (SESSION_POOL_SIZE, default 5).
@@ -84,6 +84,16 @@ type Config struct {
     // a pooled session before creating one directly instead of stalling
     // (SESSION_ACQUIRE_TIMEOUT, default 10; 0 waits indefinitely).
     SessionAcquireTimeout int
+    // SessionReuseCount bounds how many requests one chat session serves
+    // before it is deleted on Z.AI and replaced (SESSION_REUSE_COUNT,
+    // default 10). 1 restores the legacy throwaway-per-request flow.
+    // Reusing a session makes traffic look human (one chat carrying several
+    // turns instead of one chat per message) and cuts DELETE churn N-fold,
+    // which keeps the Aliyun WAF from flagging the egress IP as a bot.
+    // Safe: upstream keeps no server-side history for isolated single-turn
+    // payloads (verified e2e: same chat_id + "remember cat" then recall
+    // answers "no history"), so reuse does not thread conversations.
+    SessionReuseCount int
 }
 
 func loadConfig() *Config {
@@ -105,6 +115,7 @@ func loadConfig() *Config {
     c.SyncMode = false
     c.SessionPoolSize = defaultPoolSize
     c.SessionAcquireTimeout = int(defaultPoolWait / time.Second)
+    c.SessionReuseCount = defaultSessionReuse
 
     if p := os.Getenv("PORT"); p != "" {
         if n, err := strconv.Atoi(p); err == nil {
@@ -200,6 +211,11 @@ func loadConfig() *Config {
     if at := os.Getenv("SESSION_ACQUIRE_TIMEOUT"); at != "" {
         if n, err := strconv.Atoi(at); err == nil && n >= 0 {
             c.SessionAcquireTimeout = n
+        }
+    }
+    if rc := os.Getenv("SESSION_REUSE_COUNT"); rc != "" {
+        if n, err := strconv.Atoi(rc); err == nil && n >= 1 {
+            c.SessionReuseCount = n
         }
     }
     return c

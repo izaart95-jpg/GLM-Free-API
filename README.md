@@ -114,7 +114,8 @@ On startup a banner shows the health URL, endpoints, and auth token. The Z.AI se
 | `--agent-mode-variant` | `modern` | Agent shim: `modern` (recommended) or `legacy` |
 | `--agent-mode-level` | *(empty)* | Agent repair level: empty (default, stock parser only) or `ultra` (buffer + ToolParserLLM malformed-tool repair; requires `--agent-mode`) |
 | `--force-cpu` | `false` | Allow ToolParserLLM ultra repair on CPU-only hosts (degraded path; CPU inference is NOT recommended, GPU+SGLang is required otherwise) |
-| `--sync-mode` | `false` | Legacy synchronous flow: fresh chat per request instead of the pre-warmed pool (still GC'd) |
+| `--sync-mode` | `false` | Synchronous flow: reuse one sticky chat instead of the pre-warmed pool (still deleted + rotated) |
+| `--session-reuse-count` | `10` | How many requests one chat session serves before it is deleted on Z.AI and replaced (`1` = throwaway per request) |
 
 ### Environment Variables
 
@@ -140,28 +141,28 @@ On startup a banner shows the health URL, endpoints, and auth token. The Z.AI se
 | `LOG_LEVEL` | `debug` | `debug` dumps every Z.AI request/response, SSE lines, and headers |
 | `LOG_FORMAT` | `text` | Log format |
 | `STREAM_HOLDBACK` | `24` | Runes held back at a live stream's tail to absorb Z.AI `edit_content` backtracks before they reach the client (`0` disables; issue #23) |
-| `SYNC_MODE` | `false` | Legacy synchronous session flow (no pre-warmed pool) |
+| `SYNC_MODE` | `false` | Synchronous session flow (one sticky reused chat, no pre-warmed pool) |
 | `SESSION_POOL_SIZE` | `5` | Standing batch of ready chat sessions |
 | `SESSION_ACQUIRE_TIMEOUT` | `10` | Seconds to wait for a pooled session before creating one directly (`0` = wait forever) |
+| `SESSION_REUSE_COUNT` | `10` | Requests served per chat session before delete + replace (`1` = throwaway per request; reuse looks human and avoids WAF bot flags) |
 | `UPSTREAM_MIN_INTERVAL_MS` | *(random 200–500)* | Minimum gap between consecutive requests to Z.AI / Aliyun — paces bursts so the Aliyun WAF doesn't block the egress IP (issue #20). The gap is enforced by **one shared gate across all upstream transports** (Z.AI + Aliyun captcha), so alternating calls between the two cannot collapse the real inter-request gap to zero (issue #41). Default is drawn randomly in `[200, 500]` ms per transport (a fixed gap is a fingerprint); `0` disables pacing |
 | `TOKEN_COUNT_TTL_MS` | `5000` | How long the `/health` token count stays cached before the next probe re-queries the active database (`TOKEN_COUNT_TTL_MS <= 0` keeps the default) |
 
 ---
 
-## Session Lifecycle — Throwaway Sessions & the Session Pool
+## Session Lifecycle — Reused Sessions & the Session Pool
 
-OpenAI-compatible clients are **stateless** — they re-send the whole conversation every request, and the bridge forwards it inside a `chat_id` that materializes server-side. Leaving those chats behind would (1) fill the account with dead sessions and (2) cause **context rot** (server-side history stacking on re-sent history). So every request is **throwaway** (design ported from [DeepseekFreeAPI](https://github.com/izaart95-jpg/DeepseekFreeAPI)):
+OpenAI-compatible clients are **stateless** — they re-send the whole conversation every request, and the bridge forwards it inside a `chat_id` that materializes server-side. Leaving those chats behind would fill the account with dead sessions, and one-chat-per-message looks like bot behaviour to the Aliyun WAF (IP block). So each session is **reused up to `SESSION_REUSE_COUNT` (default 10) requests** — one chat carrying several turns, like a human — then deleted via `DELETE /api/v1/chats/{chat_id}` and replaced. Deletion is idempotent — Z.AI's `{"detail":"We could not find what you're looking for :/"}` counts as success. Reuse is safe: verified e2e that isolated single-turn payloads build no server-side history on a shared `chat_id`.
 
-- Each request draws a session, streams its response, and **once fully written (or definitively failed)** the chat is deleted via `DELETE /api/v1/chats/{chat_id}`. Deletion is idempotent — Z.AI's `{"detail":"We could not find what you're looking for :/"}` counts as success.
-- Clients never see the `chat_id`; their state lives entirely in their own `messages` array, so deletion is invisible.
+- Clients never see the `chat_id`; their state lives entirely in their own `messages` array, so reuse/rotation is invisible.
 
-**Async mode (default):** at startup the bridge pre-makes `SESSION_POOL_SIZE` (5) sessions. Requests acquire one instantly; if a burst exhausts the batch, waiters give up after `SESSION_ACQUIRE_TIMEOUT` (10 s) and create a session directly. Consumed sessions are deleted + replaced only after the response is fully processed. Z.AI chat IDs are client-generated UUIDs (a chat only materializes on first completion), so warmup is instant/local and unconsumed sessions never touch the account.
+**Async mode (default):** at startup the bridge pre-makes `SESSION_POOL_SIZE` (5) sessions. Requests acquire one instantly; if a burst exhausts the batch, waiters give up after `SESSION_ACQUIRE_TIMEOUT` (10 s) and create a session directly. Each pooled session is stocked straight back into the batch until it hits `SESSION_REUSE_COUNT`, then deleted + replaced. Z.AI chat IDs are client-generated UUIDs (a chat only materializes on first completion), so warmup is instant/local and unconsumed sessions never touch the account.
 
-**Sync mode (legacy):** `--sync-mode` / `SYNC_MODE=true` — each request creates its own session, completes, then GCs it; no pre-warming.
+**Sync mode:** `--sync-mode` / `SYNC_MODE=true` — one sticky chat is reused up to `SESSION_REUSE_COUNT`, then deleted + rotated; no pre-warming.
 
-**Graceful shutdown:** CTRL+C/SIGTERM stops accepting connections, drains in-flight responses (10 s), prints `clearing all remaining sessions...`, deletes every still-pooled session on Z.AI, then exits. A second CTRL+C force-exits.
+**Graceful shutdown:** CTRL+C/SIGTERM stops accepting connections, drains in-flight responses (10 s), prints `clearing all remaining sessions...`, deletes every still-pooled session (or the sticky sync session) on Z.AI, then exits. A second CTRL+C force-exits.
 
-**Observability:** `GET /status` reports pool state: `{ "mode": "async", "throwaway": true, "gc_enabled": true, "size": 5, "ready": 5 }`.
+**Observability:** `GET /status` reports pool state: `{ "mode": "async", "reuse": true, "maxUses": 10, "gc_enabled": true, "size": 5, "ready": 5 }`.
 
 ---
 
@@ -439,7 +440,7 @@ print(resp.content[0].text)
 2. **Captcha** — per request, an Aliyun `captcha_verify_param` is generated in-memory: `InitCaptchaV3` → `certifyId`; `arg` via RC4-like permutation cipher (KSA + PRGA over a 64-byte state); `Track` JSON + custom `ali_hash` (16-byte-state hash), zlib-compress, base64-encode, then a second RC4-like `encrypt` pass (different key); `VerifyCaptchaV3` with a pooled device token → `securityToken`; final `{certifyId, isSign, sceneId, securityToken}` base64-encoded. Tokens come FIFO from `tokens.sqlite` and are deleted after use (up to 5 retries). Hard 90 s timeout → `500` on failure.
 3. **Signature** — HMAC-SHA256 over `(sortedPayload | promptBase64 | timestamp)` with a salted bucket key from `SALT_KEY` and `timestamp / 300000`.
 4. **Streaming** — POST `/api/v2/chat/completions` with `stream:true`; parses SSE (`edit_content` + `edit_index`, `delta_content`, `content`, or OpenAI-style deltas) and re-emits as OpenAI/Anthropic SSE. Semantics mirror the official `prod-fe` bundle: `edit_content` replaces from `edit_index` (a **UTF-16 code-unit offset**, missing = 0 = full replace), `content` = full replace, `delta_content` = append. Deltas are cut on rune boundaries with a `STREAM_HOLDBACK` tail so backtracks never surface as garble (issue #23). Inline errors (HTTP 200 + `data.error`) are surfaced; on `401` the session re-initialises and retries once.
-5. **Session GC** — after the response is fully written/failed, the throwaway chat is deleted in the background and (async mode) the pool restocks. Shutdown clears all pooled sessions. See [Session Lifecycle](#session-lifecycle--throwaway-sessions--the-session-pool).
+5. **Session GC** — each chat is reused up to `SESSION_REUSE_COUNT` then deleted in the background (async mode restocks the pool; sync mode rotates the sticky chat). Shutdown clears all pooled/sticky sessions. See [Session Lifecycle](#session-lifecycle--reused-sessions--the-session-pool).
 
 ---
 

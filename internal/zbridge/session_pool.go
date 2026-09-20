@@ -84,6 +84,13 @@ var (
 const (
     // defaultPoolSize is the standing batch of pre-made ready sessions.
     defaultPoolSize = 5
+    // defaultSessionReuse is how many requests one chat session serves
+    // before it is deleted on Z.AI and replaced (SESSION_REUSE_COUNT).
+    // 10 looks human (a short chat run), cuts DELETE churn 10-fold so the
+    // Aliyun WAF stops flagging one-chat-per-message as bot behaviour,
+    // and still rotates often enough that any future server-side retention
+    // can never accumulate into context rot. 1 = legacy throwaway flow.
+    defaultSessionReuse = 10
     // defaultPoolWait bounds how long a completion request waits for a
     // pooled session before creating one directly (SESSION_ACQUIRE_TIMEOUT).
     defaultPoolWait = 10 * time.Second
@@ -233,22 +240,30 @@ func DeleteZAIChat(ctx context.Context, chatID string) error {
 // SessionPool holds the standing batch of ready stateless chat sessions.
 //
 // With the pool attached, every completion draws a pre-made session instead
-// of minting one per request, and the moment a request's response has been
-// fully written and processed the consumed session is deleted upstream and a
-// replacement is created to refill the batch — so the account never
-// accumulates garbage and the batch stays at full strength while the app
-// runs.
+// of minting one per request. Each session is REUSED up to maxUses times
+// (SESSION_REUSE_COUNT, default 10) to look human — one chat carrying
+// several turns instead of one chat per message, which is what the Aliyun
+// WAF flags as bot behaviour — and only then is it deleted upstream and
+// replaced, so DELETE churn drops N-fold while the batch stays at full
+// strength. Verified e2e: reusing one chat_id for isolated single-turn
+// payloads builds no server-side history, so reuse does not thread
+// conversations.
 type SessionPool struct {
     backend SessionBackend
     size    int
 
-    ready chan string // buffered with size; members are unused, clean sessions
+    ready chan string // buffered with size; members are reusable sessions
 
     stopOnce sync.Once
     stopCh   chan struct{}
     stopped  atomic.Bool
 
     wg sync.WaitGroup // outstanding create/delete operations
+
+    // uses tracks completed requests per pooled session ID. Guarded by mu.
+    mu      sync.Mutex
+    uses    map[string]int
+    maxUses int // <=0 means "read live from config.SessionReuseCount"
 }
 
 // NewSessionPool builds a pool that keeps size sessions ready. size < 1 is
@@ -257,12 +272,51 @@ func NewSessionPool(backend SessionBackend, size int) *SessionPool {
     if size < 1 {
         size = defaultPoolSize
     }
+    maxUses := defaultSessionReuse
+    // config is package-initialised before any pool is built in production;
+    // honour it so SESSION_REUSE_COUNT / --session-reuse-count applies.
+    // (Tests may override per-pool via SetMaxUses.)
+    if config.SessionReuseCount >= 1 {
+        maxUses = config.SessionReuseCount
+    }
     return &SessionPool{
         backend: backend,
         size:    size,
         ready:   make(chan string, size),
         stopCh:  make(chan struct{}),
+        uses:    make(map[string]int),
+        maxUses: maxUses,
     }
+}
+
+// SetMaxUses overrides the reuse limit for this pool (tests + ops tooling).
+// n < 1 restores "read live from config".
+func (p *SessionPool) SetMaxUses(n int) {
+    p.mu.Lock()
+    p.maxUses = n
+    p.mu.Unlock()
+}
+
+// getMaxUses resolves the effective reuse limit: per-pool override wins,
+// otherwise the live global config, otherwise the built-in default.
+func (p *SessionPool) getMaxUses() int {
+    p.mu.Lock()
+    override := p.maxUses
+    p.mu.Unlock()
+    if override >= 1 {
+        return override
+    }
+    if config.SessionReuseCount >= 1 {
+        return config.SessionReuseCount
+    }
+    return defaultSessionReuse
+}
+
+// Uses returns completed-request count for one pooled session (observability).
+func (p *SessionPool) Uses(id string) int {
+    p.mu.Lock()
+    defer p.mu.Unlock()
+    return p.uses[id]
 }
 
 // Size reports the configured batch size.
@@ -313,9 +367,11 @@ func (p *SessionPool) Acquire(ctx context.Context, wait time.Duration) (string, 
 
 // Release retires a consumed session. It is called only after the response
 // has been fully written and processed (or definitively failed), so the
-// session is never yanked out from under an in-flight completion: first the
-// used session is deleted upstream, then a replacement is created right away
-// to fill the gap in the batch. Both steps run in the background.
+// session is never yanked out from under an in-flight completion. The
+// session is reused until it has served maxUses requests (SESSION_REUSE_COUNT):
+// below the limit it is stocked straight back into the batch for the next
+// request; once the limit is reached it is deleted upstream and a
+// replacement is created to fill the gap. Both steps run in the background.
 func (p *SessionPool) Release(sessionID string) {
     if sessionID == "" {
         return
@@ -323,7 +379,39 @@ func (p *SessionPool) Release(sessionID string) {
     p.wg.Add(1)
     go func() {
         defer p.wg.Done()
+        max := p.getMaxUses()
+        if max < 1 {
+            max = 1
+        }
+        p.mu.Lock()
+        p.uses[sessionID]++
+        uses := p.uses[sessionID]
+        p.mu.Unlock()
+
+        if uses < max {
+            if p.stopped.Load() {
+                // Shutting down: retire only, don't rebuild the batch.
+                p.deleteOne(sessionID, "shutdown")
+                p.mu.Lock()
+                delete(p.uses, sessionID)
+                p.mu.Unlock()
+                return
+            }
+            select {
+            case p.ready <- sessionID:
+                log.Printf("[Pool:reuse] session %s reused %d/%d (%d/%d ready)", sessionID, uses, max, len(p.ready), p.size)
+            case <-p.stopCh:
+                p.deleteOne(sessionID, "shutdown-race")
+                p.mu.Lock()
+                delete(p.uses, sessionID)
+                p.mu.Unlock()
+            }
+            return
+        }
         p.deleteOne(sessionID, "used")
+        p.mu.Lock()
+        delete(p.uses, sessionID)
+        p.mu.Unlock()
         if p.stopped.Load() {
             return // shutting down: retire only, don't rebuild the batch
         }
@@ -369,6 +457,11 @@ func (p *SessionPool) Shutdown() {
         } else {
             log.Printf("[Pool] cleared %d pooled session(s): deleted %v", len(leftover), leftover)
         }
+        p.mu.Lock()
+        for _, id := range leftover {
+            delete(p.uses, id)
+        }
+        p.mu.Unlock()
     } else {
         log.Printf("[Pool] clearing all sessions... none remaining")
     }
@@ -455,44 +548,107 @@ func (p *SessionPool) deleteOne(id, reason string) {
 // ── Bridge glue ─────────────────────────────────────────────────────────────
 
 var (
-    // sessionPool holds the standing batch of ready throwaway chat sessions.
+    // sessionPool holds the standing batch of reusable chat sessions.
     // nil when running in sync mode (--sync-mode / SYNC_MODE=true); the
-    // legacy per-request flow still garbage-collects used sessions.
+    // sync flow reuses one sticky session up to SESSION_REUSE_COUNT too.
     sessionPool *SessionPool
     // poolWait bounds how long a request waits for a pooled session before
     // creating one directly (0 waits forever). See SESSION_ACQUIRE_TIMEOUT.
     poolWait = defaultPoolWait
+
+    // syncSticky is the single reused chat ID for sync mode (--sync-mode):
+    // one chat carries up to SESSION_REUSE_COUNT requests (human-like)
+    // instead of one chat per message (bot-like), then rotates. Guarded by
+    // syncMu. Verified e2e: reuse builds no server-side history.
+    syncMu   sync.Mutex
+    syncID   string
+    syncUses int
 )
+
+// syncMaxUses resolves the effective sync reuse limit.
+func syncMaxUses() int {
+    if config.SessionReuseCount >= 1 {
+        return config.SessionReuseCount
+    }
+    return defaultSessionReuse
+}
+
+// ResetSyncSticky clears the sync-mode sticky session (tests + pool attach).
+// The caller owns deleting the old ID if it still needs GC; here we just
+// forget it so the next Acquire mints fresh. Production rotation deletes
+// via gcSessions before clearing.
+func ResetSyncSticky() {
+    syncMu.Lock()
+    syncID = ""
+    syncUses = 0
+    syncMu.Unlock()
+}
+
+// ShutdownSyncSession deletes the sticky sync session, if any (shutdown path
+// so a reused chat is never left behind on the account).
+func ShutdownSyncSession() {
+    syncMu.Lock()
+    id := syncID
+    syncID = ""
+    syncUses = 0
+    syncMu.Unlock()
+    if id == "" {
+        return
+    }
+    ctx, cancel := context.WithTimeout(context.Background(), poolOpTimeout)
+    defer cancel()
+    if err := (zaiSessionBackend{}).DeleteChatSession(ctx, id); err != nil {
+        log.Printf("[Sync] warning: failed to delete sticky session %s: %v", id, err)
+        return
+    }
+    log.Printf("[Sync] cleared sticky session: %s", id)
+}
 
 // AttachSessionPool swaps the async session pool (and its acquire wait
 // window) used by stateless requests and returns a function that restores
 // the previous attachment. Passing nil detaches the pool, i.e. switches to
-// the sync (legacy per-request) flow. Run uses it once at startup; the
+// the sync (sticky-reuse) flow. Run uses it once at startup; the
 // blackbox tests in tests/ use it to exercise both flows.
 func AttachSessionPool(p *SessionPool, wait time.Duration) func() {
     oldPool, oldWait := sessionPool, poolWait
     sessionPool, poolWait = p, wait
+    // Avoid cross-mode pollution in tests: a stale sticky ID must not leak
+    // into a pooled run or vice versa.
+    ResetSyncSticky()
     return func() {
         sessionPool, poolWait = oldPool, oldWait
+        ResetSyncSticky()
     }
 }
 
-// AcquireStatelessSession returns a throwaway chat ID for one stateless
-// request. Async mode takes a pre-made session from the standing batch so no
-// per-request creation cost is paid; if a burst exhausts the batch the
-// request waits up to poolWait and then creates a session directly instead
-// of stalling indefinitely. Sync mode mints a fresh session per request.
+// AcquireStatelessSession returns a chat ID for one stateless request.
+// Async mode takes a pre-made session from the standing batch (each pooled
+// session serves up to SESSION_REUSE_COUNT requests before rotating); if a
+// burst exhausts the batch the request waits up to poolWait and then creates
+// a session directly instead of stalling indefinitely. Sync mode reuses one
+// sticky session up to SESSION_REUSE_COUNT requests before rotating.
 //
 // The second return value reports whether the session is pool-owned (retired
-// through pool.Release) or on-demand (retired through gcSessions).
+// through pool.Release) or not (retired through ReleaseStatelessSession's
+// sync-reuse / on-demand path).
 func AcquireStatelessSession(ctx context.Context) (chatID string, pooled bool, err error) {
     if sessionPool == nil {
-        return randomUUID(), false, nil
+        syncMu.Lock()
+        if syncID == "" {
+            syncID = randomUUID()
+            syncUses = 0
+            log.Printf("[Sync] sticky session: %s (new)", syncID)
+        } else {
+            log.Printf("[Sync] sticky session: %s (reuse %d/%d)", syncID, syncUses, syncMaxUses())
+        }
+        id := syncID
+        syncMu.Unlock()
+        return id, false, nil
     }
     id, acqErr := sessionPool.Acquire(ctx, poolWait)
     switch {
     case acqErr == nil:
-        log.Printf("[Pool] stateless session: %s (%d/%d ready)", id, sessionPool.Ready(), sessionPool.Size())
+        log.Printf("[Pool] stateless session: %s (%d/%d ready, uses %d/%d)", id, sessionPool.Ready(), sessionPool.Size(), sessionPool.Uses(id), sessionPool.getMaxUses())
         return id, true, nil
     case errors.Is(acqErr, ErrPoolTimeout):
         chatID = randomUUID()
@@ -508,9 +664,10 @@ func AcquireStatelessSession(ctx context.Context) (chatID string, pooled bool, e
 
 // ReleaseStatelessSession retires a used stateless chat session. It must be
 // called only after the response has been fully written and processed (or
-// definitively failed): the chat is deleted on Z.AI so its history never
-// outlives the request, and in async mode the pool immediately stocks a
-// replacement to keep the batch at full strength.
+// definitively failed). Pooled sessions go back through pool.Release (reuse
+// until SESSION_REUSE_COUNT, then delete + refill). Sync-mode sticky sessions
+// are kept until they hit SESSION_REUSE_COUNT, then deleted and rotated.
+// On-demand overflow sessions (pool busy) are still deleted immediately via GC.
 func ReleaseStatelessSession(chatID string, pooled bool) {
     if chatID == "" {
         return
@@ -519,7 +676,34 @@ func ReleaseStatelessSession(chatID string, pooled bool) {
         sessionPool.Release(chatID)
         return
     }
-    gcSessions("stateless", chatID)
+    if sessionPool != nil {
+        // On-demand overflow (pool busy): single-use, delete immediately.
+        gcSessions("stateless", chatID)
+        return
+    }
+    // Sync mode: sticky reuse.
+    syncMu.Lock()
+    if chatID != syncID {
+        // Stale ID (rotated concurrently): delete directly, don't touch counters.
+        stale := chatID
+        syncMu.Unlock()
+        gcSessions("sync-stale", stale)
+        return
+    }
+    syncUses++
+    uses, max := syncUses, syncMaxUses()
+    if uses < max {
+        syncMu.Unlock()
+        log.Printf("[Sync] session %s reused %d/%d", chatID, uses, max)
+        return
+    }
+    // Limit reached: rotate. Clear first so the next Acquire mints fresh
+    // even while the DELETE below is still in flight.
+    syncID = ""
+    syncUses = 0
+    syncMu.Unlock()
+    log.Printf("[Sync] session %s reached max uses %d, rotating", chatID, max)
+    gcSessions("sync-reuse-max", chatID)
 }
 
 // gcSessions asynchronously deletes used-up chat sessions on Z.AI so their
@@ -552,16 +736,31 @@ func gcSessions(reason string, sessionIDs ...string) {
 
 // sessionPoolStatus reports the session-lifecycle mode for /status.
 func sessionPoolStatus() map[string]interface{} {
+    max := config.SessionReuseCount
+    if max < 1 {
+        max = defaultSessionReuse
+    }
     if sessionPool == nil {
-        return map[string]interface{}{
+        syncMu.Lock()
+        uses, cur := syncUses, syncID
+        syncMu.Unlock()
+        st := map[string]interface{}{
             "mode":       "sync",
-            "throwaway":  true,
+            "throwaway":  false,
+            "reuse":      true,
+            "maxUses":    max,
             "gc_enabled": true,
         }
+        if cur != "" {
+            st["currentUses"] = uses
+        }
+        return st
     }
     return map[string]interface{}{
         "mode":       "async",
-        "throwaway":  true,
+        "throwaway":  false,
+        "reuse":      true,
+        "maxUses":    sessionPool.getMaxUses(),
         "gc_enabled": true,
         "size":       sessionPool.Size(),
         "ready":      sessionPool.Ready(),

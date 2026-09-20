@@ -92,8 +92,10 @@ func waitFor(t *testing.T, what string, timeout time.Duration, cond func() bool)
 // ── pool semantics ──────────────────────────────────────────────────────────
 
 func TestSessionPoolWarmupAcquireRelease(t *testing.T) {
+    defer zbridge.OverrideSessionReuseCount(1)()
     b := &stubBackend{}
     p := zbridge.NewSessionPool(b, 3)
+    p.SetMaxUses(1)
     p.Start()
 
     waitFor(t, "warmup to stock 3 sessions", 3*time.Second, func() bool {
@@ -182,8 +184,10 @@ func TestSessionPoolShutdownClearsLeftovers(t *testing.T) {
 }
 
 func TestSessionPoolReleaseAfterShutdownNoRefill(t *testing.T) {
+    defer zbridge.OverrideSessionReuseCount(1)()
     b := &stubBackend{}
     p := zbridge.NewSessionPool(b, 1)
+    p.SetMaxUses(1)
     p.Start()
 
     waitFor(t, "warmup to stock 1 session", 3*time.Second, func() bool {
@@ -308,7 +312,9 @@ func TestDeleteZAIChat(t *testing.T) {
 // ── bridge glue (sync-mode path) ────────────────────────────────────────────
 
 func TestSyncModeAcquireReleaseDeletesUpstream(t *testing.T) {
-    // No pool attached -> legacy per-request flow, still garbage-collected.
+    // No pool attached -> sync sticky-reuse flow. Pin reuse=1 to assert the
+    // legacy immediate-GC behaviour; reuse>1 is covered by the reuse tests.
+    defer zbridge.OverrideSessionReuseCount(1)()
     restore := zbridge.AttachSessionPool(nil, 10*time.Second)
     defer restore()
 
@@ -373,8 +379,10 @@ func TestAcquireStatelessSessionPoolBusyFallback(t *testing.T) {
 }
 
 func TestAcquireStatelessSessionFromPool(t *testing.T) {
+    defer zbridge.OverrideSessionReuseCount(1)()
     b := &stubBackend{}
     pool := zbridge.NewSessionPool(b, 2)
+    pool.SetMaxUses(1)
     restore := zbridge.AttachSessionPool(pool, time.Second)
     defer func() {
         pool.Shutdown()
@@ -408,12 +416,13 @@ func TestAcquireStatelessSessionFromPool(t *testing.T) {
 // TestHTTPChatCompletionsUsesPooledSessionThenDeletes drives the REAL HTTP
 // surface (zbridge.NewHandler: routes + auth + CORS) with the async pool
 // attached and a mock Z.AI upstream, proving the full throwaway-session
-// loop:
+// loop (pinned to reuse=1 here; reuse>1 is covered by the reuse tests):
 //
 //   warm pool -> handler acquires a pooled chat_id -> completion references
 //   it upstream -> response fully written -> deferred release deletes the
 //   chat on the mock (DELETE /api/v1/chats/{id}) -> pool refills the batch.
 func TestHTTPChatCompletionsUsesPooledSessionThenDeletes(t *testing.T) {
+    defer zbridge.OverrideSessionReuseCount(1)()
     var mu sync.Mutex
     completionChatIDs := []string{}
     deletedChatIDs := []string{}
@@ -458,6 +467,7 @@ func TestHTTPChatCompletionsUsesPooledSessionThenDeletes(t *testing.T) {
 
     // Attach a real pool backed by the production Z.AI backend.
     pool := zbridge.NewSessionPool(zbridge.NewZAIChatBackend(), 2)
+    pool.SetMaxUses(1)
     restore := zbridge.AttachSessionPool(pool, time.Second)
     defer func() {
         pool.Shutdown()

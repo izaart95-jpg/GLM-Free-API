@@ -95,3 +95,14 @@ func SwapDatabase(newPath string) error { return swapDB(newPath) }
 // TokenCount exposes the TTL-cached token count (the /health value) for
 // tests and operational scripting. -1 means "unavailable".
 func TokenCount() int64 { return globalDBState.tokenCount() }
+
+// OverrideSessionReuseCount swaps the global SESSION_REUSE_COUNT and returns
+// a restore func. Tests use it to pin throwaway (1) or reuse (N) behaviour.
+func OverrideSessionReuseCount(n int) func() {
+    prev := config.SessionReuseCount
+    config.SessionReuseCount = n
+    return func() { config.SessionReuseCount = prev }
+}
+
+// ResetSyncStickySession clears the sync-mode sticky session (tests).
+func ResetSyncStickySession() { ResetSyncSticky() }

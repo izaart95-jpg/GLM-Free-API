@@ -63,7 +63,8 @@ func Run() {
     flag.StringVar(&config.AgentModeVariant, "agent-mode-variant", config.AgentModeVariant, "Agent mode shim variant: modern (default, XML-sectioned prompt) or legacy ([ROLE: ...] rewrite)")
     flag.StringVar(&config.AgentModeLevel, "agent-mode-level", config.AgentModeLevel, "Agent mode repair level: empty (default, stock parser only) or ultra (buffer + ToolParserLLM malformed-tool repair; requires --agent-mode)")
     flag.BoolVar(&config.ForceCPU, "force-cpu", config.ForceCPU, "Allow ToolParserLLM ultra repair on CPU-only hosts (degraded path; CPU inference is NOT recommended, GPU+SGLang is required otherwise)")
-    flag.BoolVar(&config.SyncMode, "sync-mode", config.SyncMode, "Legacy synchronous session flow: create a fresh chat per request instead of drawing from the pre-warmed session pool (used sessions are still deleted on Z.AI after each response)")
+    flag.BoolVar(&config.SyncMode, "sync-mode", config.SyncMode, "Legacy synchronous session flow: reuse one sticky chat up to SESSION_REUSE_COUNT instead of drawing from the pre-warmed session pool")
+    flag.IntVar(&config.SessionReuseCount, "session-reuse-count", config.SessionReuseCount, "How many requests one chat session serves before it is deleted on Z.AI and replaced (SESSION_REUSE_COUNT, default 10; 1 = throwaway per request)")
     flag.Parse()
 
     if _, err := os.Stat(dbPath); err != nil {
@@ -130,23 +131,26 @@ func Run() {
         fetchModelsFromZAI()
     }()
 
-    // ── Session lifecycle (ported from the DeepseekFreeAPI reference) ─────
-    // Every stateless request runs on a throwaway chat session that is
-    // deleted on Z.AI right after its response is fully processed, so no
-    // server-side history outlives a request and the account never
-    // accumulates dead sessions. By default the async flow keeps a standing
-    // batch of pre-made sessions ready (SESSION_POOL_SIZE); --sync-mode
-    // restores the legacy per-request flow (still garbage-collected).
+    // ── Session lifecycle ─────────────────────────────────────────────────
+    // Every stateless request runs on a REUSED chat session (up to
+    // SESSION_REUSE_COUNT requests per chat) instead of one chat per
+    // message: one-chat-per-message is flagged by the Aliyun WAF as bot
+    // behaviour and gets the egress IP blocked. Reuse is safe — verified
+    // e2e that isolated single-turn payloads build no server-side history
+    // on a shared chat_id — and each session is still deleted on Z.AI once
+    // it hits its reuse limit, so the account never accumulates dead chats.
+    // Async keeps a standing batch (SESSION_POOL_SIZE); --sync-mode reuses
+    // one sticky session instead of the pool.
     if config.SyncMode {
-        log.Println("[Startup] Session mode: SYNC (--sync-mode: fresh chat per request, deleted on Z.AI after use)")
+        log.Printf("[Startup] Session mode: SYNC (--sync-mode: one sticky chat reused up to %dx, deleted on Z.AI + rotated after)", config.SessionReuseCount)
     } else {
         poolWait = time.Duration(config.SessionAcquireTimeout) * time.Second
         if config.SessionAcquireTimeout <= 0 {
             poolWait = 0 // 0 => wait indefinitely for a pooled session
         }
         sessionPool = NewSessionPool(NewZAIChatBackend(), config.SessionPoolSize)
-        log.Printf("[Startup] Session mode: ASYNC (pre-made chat batch x%d, throwaway: deleted on Z.AI + refilled after each response)", sessionPool.Size())
-        log.Printf("[Startup]               SESSION_POOL_SIZE=%d SESSION_ACQUIRE_TIMEOUT=%ds", sessionPool.Size(), config.SessionAcquireTimeout)
+        log.Printf("[Startup] Session mode: ASYNC (pre-made chat batch x%d, each reused up to %dx then deleted on Z.AI + refilled)", sessionPool.Size(), sessionPool.getMaxUses())
+        log.Printf("[Startup]               SESSION_POOL_SIZE=%d SESSION_ACQUIRE_TIMEOUT=%ds SESSION_REUSE_COUNT=%d", sessionPool.Size(), config.SessionAcquireTimeout, sessionPool.getMaxUses())
     }
 
     srv := &http.Server{
@@ -190,10 +194,13 @@ func Run() {
         }
         cancel()
 
-        // Clear any sessions still pooled so nothing is left behind on the
-        // Z.AI account (checked-out ones are deleted by their own Release).
+        // Clear any sessions still pooled (or the sticky sync session) so
+        // nothing is left behind on the Z.AI account (checked-out ones are
+        // deleted by their own Release).
         if sessionPool != nil {
             sessionPool.Shutdown()
+        } else {
+            ShutdownSyncSession()
         }
         log.Println("[Shutdown] All chat sessions cleared. Goodbye.")
     }
