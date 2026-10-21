@@ -16,7 +16,8 @@ An OpenAI- **and Anthropic-compatible** API proxy for [chat.z.ai](https://chat.z
 - **Agent mode** — translates OpenAI tools/roles into the user-only prompt Z.AI's endpoint accepts, then rewrites the model's `<<<TOOL_CALL>>>` blocks back into native `tool_calls` (OpenAI) / `tool_use` (Anthropic). Modern XML-sectioned shim (default, `<already_called>` anti-loop section included) + legacy `[ROLE: ...]` shim (opt-in)
 - **Per-model feature resolution** — resolved from Z.AI server capabilities with stored per-model overrides; `image_generation` is **always forced `false`**; `reasoning_effort` (`high`/`max`) forwarded only when the model supports it (forces `enable_thinking=true`)
 - **Live model list** — full catalog from Z.AI `/api/models` (cached 5 min, static fallback) with OpenAI-style `architecture`/modality on `/v1/models`
-- **Token pool** — device tokens harvested via `cmd/token-collector` into `tokens.sqlite`, consumed FIFO and deleted after use (up to 5 retries per captcha)
+- **Token pool** — device tokens minted by `cmd/token-collector` (one brief browser visit registers the device, then the tokens are produced in Go) into `tokens.sqlite`, consumed FIFO and deleted after use (up to 5 retries per captcha)
+- **Device tokens minted in Go** — one brief browser visit registers the device with Aliyun's FeiLin service; the session it returns is then reused to mint any number of device tokens in-process (AES-128-CBC payload + MD5 seal, `VerifyCaptchaV3` → **T001**), and stays verifiable for **≥35 min after the browser is closed** — no browser, no Playwright, no per-token page
 - **Background captcha cache** — with agent mode on, captcha params are pre-generated asynchronously (2 cached, 75 s TTL, auto-pauses after 3 min idle)
 - **Graceful shutdown** — CTRL+C/SIGTERM drains in-flight requests (10 s), then deletes every remaining pooled session on Z.AI before exiting (second CTRL+C force-exits)
 
@@ -89,7 +90,8 @@ go mod init zai-api && go mod tidy
 # 3. Optional: playwright deps (only for the token collector, when deps are missing)
 npx playwright install-deps
 
-# 4. Generate the token database
+# 4. Generate the token database (needs a display: the risk layer rejects
+#    headless device sessions — use `xvfb-run -a` on a headless server)
 go run ./cmd/token-collector
 
 # 5. Start the server
@@ -446,14 +448,26 @@ print(resp.content[0].text)
 
 ## Token Collection (`cmd/token-collector`)
 
-Seeds `tokens.sqlite` with device tokens harvested from `chat.z.ai` via Playwright, with a Bubble Tea TUI (progress bar, live logs, spinner).
+Seeds `tokens.sqlite` with device tokens for the bridge, with a Bubble Tea TUI (progress bar, live logs, spinner).
+
+**How it works (rewritten 2026-10-21).**  The browser is used **once, briefly**:
+
+1. it opens `chat.z.ai` and boots the Aliyun-SAF captcha SDK, which registers the device with the FeiLin device service (`Log1` → `InitCaptchaV3` → `Log2` → `Log3`) and hands out a **trusted device session**;
+2. the collector grabs the `Log1` response (the `DeviceConfig`) and **one** genuine device token, whose decrypted payload is the collector template;
+3. the browser is closed;
+4. every token is then **minted in-process** (`cmd/token-collector/feilin.go`): refresh the per-session fields (42/72/87) and the per-token field 74 + the trailing 93/94 probe-log entries, AES-128-CBC-seal with the session key, assemble the 5-field token.
+
+The browser is needed **once per session, not once per token** — a single session mints an arbitrary number of tokens, and it stays usable after the browser is gone (measured: 18/18 verifies over 35 minutes with no browser running).
+
+> **The browser must run headful.**  The Aliyun risk layer judges the *client* that issues the device service's `Log1`: a headless browser is rejected exactly like a pure HTTP client, and the tokens it produces will not verify.  The `Log1` request bytes are byte-identical to what the SDK sends, and the fingerprint inside the token is irrelevant — a token minted from a foreign machine's payload still verifies.  See `.assets/reports/aliyun-captcha-report.md` §13 and `.assets/reports/Fielin-report.md` §28.
 
 ```bash
 go build -ldflags="-s -w" -trimpath -o token-collector ./cmd/token-collector   # portable
 # modern CPUs, fully static: CGO_ENABLED=0 GOAMD64=v3 go build -ldflags="-s -w" -trimpath -o token-collector ./cmd/token-collector
 ./token-collector                        # interactive TUI prompts
 ./token-collector --tokens 750 --batch 3 # specific configuration
-./token-collector --parallel 3 --headed  # parallel workers, visible browser
+./token-collector --parallel 3          # parallel workers, one browser
+xvfb-run -a ./token-collector           # headless server: a virtual display is enough
 ```
 
 | Flag | Default | Description |
@@ -461,12 +475,17 @@ go build -ldflags="-s -w" -trimpath -o token-collector ./cmd/token-collector   #
 | `--unsafe` | `false` | Raise limits: tokens 1500, batches 25, parallel 5 |
 | `--tokens` | `0` | Tokens per batch (0 = prompt; default 850, max 1500) |
 | `--batch` | `0` | Batches (0 = prompt; default 5, max 9 / 25 unsafe) |
-| `--parallel` | `0` | Parallel pages on one browser (0 = prompt; max 3 / 5 unsafe) |
-| `--headed` | `false` | Show browser window |
+| `--parallel` | `0` | Parallel workers on one browser (0 = prompt; max 3 / 5 unsafe) |
+| `--headed` | `true` | Show the browser window (keep it on — headless sessions are rejected) |
+| `--headless` | `false` | Force headless — the minted tokens will **not** verify (diagnostics only) |
+| `--session-max-age` | `15m` | Re-harvest the device session after this long (it has a server-side lifetime) |
+| `--export-session` | *(empty)* | Write the harvested session + payload template as JSON (consumable by `.assets/scripts/live_validate.py --session-mint`) |
 | `--block-trackers` | `false` | URL allowlist blocking tracker/analytics requests |
 | `--no-tui` | `false` | Plain text output |
 
-Implementation: pure-Go SQLite (WAL, 64 MB page cache, 256 MB mmap); one page per worker kept open across batches; parallel batches on a single browser; `GOGC=200`; lock-free atomics for abort/total; TUI ring buffer (1000 lines, scroll ↑/↓ g/G); allowlist permits only `chat.z.ai`, z-cdn assets, Aliyun captcha scripts, and `cloudauth-device`.
+Implementation: pure-Go SQLite (WAL, 64 MB page cache, 256 MB mmap); one browser visit per session, tokens minted in Go; `GOGC=200`; lock-free atomics for abort/total; TUI ring buffer (1000 lines, scroll ↑/↓ g/G); allowlist permits only `chat.z.ai`, z-cdn assets, Aliyun captcha scripts, and `cloudauth-device`.
+
+Cross-checks: `go test ./cmd/token-collector/` replays the archived golden vectors (the `DeviceConfig` decrypt and a byte-exact token re-seal), and `.assets/scripts/live_validate.py --session-mint N --session <collector export>` re-mints and re-verifies the collector's own session against the live service.
 
 ---
 

@@ -13,6 +13,11 @@
 10. [Zlib Compression & Data Transformation](#10-zlib-compression--data-transformation)
 11. [VM-Based Hash Calculation Reverse Engineering](#11-vm-based-hash-calculation-reverse-engineering)
 12. [TrackJson `arg` Value Generation](#12-trackjson-arg-value-generation)
+13. [What the risk layer actually judges (Session-4)](#13-what-the-risk-layer-actually-judges-session-4-2026-10-21)
+    - [13.1 What a client must therefore do](#131-what-a-client-must-therefore-do)
+    - [13.2 The `data` parameter is *not* the blocker](#132-the-data-parameter-is-not-the-blocker)
+14. [Device-service upload formats (Log2 / Log3) — byte-exact](#14-device-service-upload-formats-log2--log3--byte-exact)
+15. [Credential spellings](#15-credential-spellings)
 
 ---
 
@@ -2270,3 +2275,123 @@ m[y] = k + (~s ? s : 8)(22, 44)
 ["o", "n", "r", "t", "e", "_", "Boolean", "a", "Number", "h", "String", "m", "", 0, 59, "fromCharCode", 90, 79, 84, 89, "map", "join", "C", 118, 20, 2, 25, 23, "l", 239, 138, 129, 140, 128, 139, 186, 189, 166, 172, 130, 159, 155, "c", 252, 152, 153, 147, 169, 174, 181, 191, 145, 146, 136, "f", 109, 8, 30, 14, 12, 29, "s", 220, 178, 185, 175, "arguments", 1, 32, 50, 10, 51, 6, 44, 37, 16, 46, 11, 62, 19, 43, 60, 33, 53, 34, 7, 26, 48, 5, 4, 61, 13, 47, 49, 18, 27, 22, 17, 39, 56, 41, 38, 55, 31, 15, 58, 52, 40, 57, 45, 35, 36, 42, 54, 63, 3, 24, 28, 9, 21, "length", "charCodeAt", 255, null, "call"]
           
 ```
+
+---
+
+## 13. What the risk layer actually judges (Session-4, 2026-10-21)
+
+This section closes the loop left open by §8/§9: *why* a technically perfect
+`InitCaptchaV3` + `VerifyCaptchaV3` pair can still come back `F001`
+("suspected attack - risk policy rejection").
+
+The device token that `VerifyCaptchaV3` carries is bound to a **device
+session** that the FeiLin device service (`cloudauth-device-dualstack.*.aliyuncs.com`)
+handed out in its `Log1` response.  The captcha service then asks the device
+service whether that session is *trusted*.
+
+Measured A/B matrix (one browser run, one variable at a time; full detail in
+`Fielin-report.md` §28 and `../resources/live_captures.md` §S4):
+
+| `Log1` issued by | `Log2`/`Log3` for that session | verdict |
+|---|---|---|
+| headful browser | by the browser | **T001** |
+| headful browser | by a pure HTTP client (byte-exact format, genuine fingerprint) | **T001** |
+| headful browser | none | F001 |
+| headless browser | by the browser | F001 |
+| headless browser | by a pure HTTP client (headful fingerprint) | F001 |
+| any pure HTTP client | by a pure HTTP client | F001 |
+
+Three things follow, and they are the whole story of §13:
+
+1. **The request bytes are not the problem.**  The `Log1` body is static (no
+   timestamp, no nonce, no fingerprint) and byte-identical to what we can send
+   from any HTTP client; the wire headers are reproducible too (same names,
+   same values, same order — and the SDK sends **no `Origin`, no `Referer`, no
+   `Cookie`**).
+2. **The fingerprint is not the problem.**  A token minted from a *foreign*
+   machine's 140-field payload verifies `T001` against a session that
+   registered this machine's fingerprint.
+3. **The client is the problem.**  The service judges the browser that issued
+   the `Log1` — a headless browser is rejected exactly like a Python client,
+   and no amount of re-uploading a genuine fingerprint rescues it.  The
+   judgement is finer than the normalised TLS fingerprint (JA3/JA4a) that
+   `curl-impersonate` reproduces exactly.
+
+### 13.1 What a client must therefore do
+
+* register the device **once** with a real, headful browser (this also performs
+  the `Log2`/`Log3` fingerprint registration, which is what makes the session
+  trusted — a session with no uploads is not trusted either);
+* mint as many tokens as it likes from that one session (measured: 18/18
+  verifies over 35 minutes, with the browser already closed);
+* give every token its **own** `InitCaptchaV3` — a `CertifyId` is single-use
+  and reusing one answers `F008` "duplicate";
+* keep the behaviour log's `userAgent` equal to the `User-Agent` the request
+  was sent with, and the `Log2` head's field 5 (the GatherCost) equal to the
+  token's `tC`.
+
+### 13.2 The `data` parameter is *not* the blocker
+
+For the record, the `data` payload of §10/§12 was re-measured against the live
+service on 2026-10-21: the track shape does **not** decide the verdict.
+`VerifyTime = startTime + 300` and `+ 5000` both verify, with and without the
+`si` screen telemetry, and the `arg` constant of the current `dynamicJS`
+(§12's `4xrihv8zb8tf1mfj`, from an older build) is accepted as-is.  §14 of
+`Fielin-report.md` had flagged the track shape as suspect; it is not.
+
+## 14. Device-service upload formats (Log2 / Log3) — byte-exact
+
+The device service (`cloudauth-device-dualstack.*.aliyuncs.com`) takes two
+uploads that register the device.  Their exact layout was decoded from live
+captures and is now implemented in `cmd/token-collector/feilin.go`:
+
+```
+Log2 head : appKey#W#<blob32>#W20220202#CLOUD#<GatherCost>#501#<payload>
+Log2 inner: sessionId#b64(AES(sk,RAW_DEVICE_DATA))#AES(sk,'saf-captcha')
+                    #AES(sk,'W.10055')##AES(sk,ts)
+
+Log3 head : appKey#W#<blob32>#W20220202#CLOUD#<cost>#<payload>
+Log3 inner: 511#b64(A)#b64(B)
+     A = sessionId##AES(sk,'saf-captcha')#AES(sk,'W.10055')##AES(sk,ts)
+     B = sessionId#b64(AES(sk,BEHAVIOUR))#AES(sk,'saf-captcha')
+             #AES(sk,'W.10055')##AES(sk,ts)
+```
+
+with
+
+```
+blob32 = AES-128-CBC(sessionKey, IV, PKCS7("W.10055#saf-captcha#<sceneId>"))
+```
+
+`blob32` was long treated as an opaque per-build constant; it is in fact
+derived from the session key, so it must be recomputed for every session.
+Sending a stale `blob32` is one of the reasons a device never registers.
+
+`RAW_DEVICE_DATA` is the collector's full measurement set (the same schema as
+the token payload, but with the probe fields populated) and `BEHAVIOUR` is the
+`{"mousemove":[],…,"userAgent":"…"}` object.  Both are encrypted with the
+session key, so a device can only upload a fingerprint it could actually
+produce.
+
+## 15. Credential spellings
+
+The live SDK sends the captcha-service credential as **`AaduaneId`** (Aliyun's
+own typo) and the device-service credential as `AaduaneId` too.  Both spellings
+were exercised against the live endpoints on 2026-10-21 and both are accepted,
+with either credential pair:
+
+```
+captcha : AaduaneId=111jdk439dJJIjd023823201
+          secret     222aiJodos2938JDdosko2djd82sf0            <- what the live SDK sends
+          AccessKeyId=LTAI5tSEBwYMwVKAQGpxmvTd
+          secret     YSKfst7GaVkXwZYvVihJsKF9r89koz            <- what this repo ships
+device  : AaduaneId=DuaneAprqkYsF3nt1yjK29Bf
+          secret     DuanemHmyeE6LXCC46sJEDUw5DTlSZ            <- both services
+```
+
+(These are the *application* credentials the captcha SDK embeds in its public
+bundle — every visitor's browser ships them; they are not user secrets.  They
+rotate, so harvest them from the running SDK when they go stale.)
+
+The POP signature is computed over the parameter *name*, so the name that is
+actually sent must be the one that was signed.

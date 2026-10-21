@@ -35,7 +35,20 @@ AES_IV: bytes = b"0123456789ABCDEF"     # UTF-8 bytes of the literal — NOT hex
 MD5_SECRET: str = "daye,raolewoba!"     # p = md5([tF,Q,w,tC,secret].join('#'))
 RES_KEY: bytes = b"87f879f135f27da7"    # AES key that decrypts the DeviceConfig blob
 N_FIELDS: int = 140                     # payload field count (139 '#' separators)
-LIVE_CAPTURES: str = str(Path(__file__).resolve().parent / "live_captures.md")
+
+def _live_captures_path() -> Path:
+    """Locate live_captures.md.
+
+    The capture file lives in .assets/resources/; older revisions of these
+    scripts kept it next to them, so both locations are probed.
+    """
+    here = Path(__file__).resolve().parent
+    for cand in (here / "live_captures.md", here.parent / "resources" / "live_captures.md"):
+        if cand.exists():
+            return cand
+    return here / "live_captures.md"
+
+LIVE_CAPTURES: str = str(_live_captures_path())
 
 # ─────────────────────────────────────────────────────────────────────────────
 # (1) REPLAY_FIELDS — TOKEN1's decrypted `w` payload (session A), 140 elements

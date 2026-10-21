@@ -83,6 +83,17 @@
     - [27.2 Fresh-session mint constraint](#272-fresh-session-mint-constraint)
     - [27.3 Sign/verify flow notes](#273-signverify-flow-notes)
     - [27.4 Session-1 deliverable pointers](#274-session-1-deliverable-pointers)
+- **Part III — Session-4 findings (§28–§35, the trust model)**
+  - [28 The trust model — the session is decided by the CLIENT](#28-the-trust-model--the-session-is-decided-by-the-client)
+    - [28.1 The `Log1` request is byte-identical to ours](#281-the-log1-request-is-byte-identical-to-ours)
+    - [28.2 Consequence for a token factory](#282-consequence-for-a-token-factory)
+  - [29 The device-service upload formats (Log2 / Log3), byte-exact](#29-the-device-service-upload-formats-log2--log3-byte-exact)
+  - [30 Credential facts (both spellings work)](#30-credential-facts-both-spellings-work)
+  - [31 One session → N tokens, and how long a session lives](#31-one-session--n-tokens-and-how-long-a-session-lives)
+  - [32 HC1 must be a window, not an equality](#32-hc1-must-be-a-window-not-an-equality)
+  - [33 The rewritten `cmd/token-collector`](#33-the-rewritten-cmdtoken-collector)
+  - [34 End-to-end result](#34-end-to-end-result)
+  - [35 Residual risks / what is still open](#35-residual-risks--what-is-still-open)
 
 ---
 
@@ -1868,3 +1879,214 @@ For a fresh session (new DeviceConfig), the field-43 log strategy must stay live
 | `analysis_fields.md` / `analysis_keys.md` | Session-1 analysis deliverables (140-field spec + refresh rules; key/IV hierarchy + code citations) — **deleted by the Session-2 cleanup after consolidation; their operative content is preserved in Part II (§23/§24) and §11–§21** |
 | `feilin.pretty.js` / `feilin087.…js` | the deobfuscated / raw bundle (source for all code citations) |
 
+
+---
+
+# Part III — Session-4 findings (§28–§34): what actually decides the verdict
+
+*2026-10-21.  Independent re-derivation on a fresh host (Ubuntu 26.04, aarch64,
+egress 223.188.38.120) with a headful Chromium 120.  Live material:
+`.assets/resources/live_captures.md` §S4.*
+
+## 28 The trust model — the session is decided by the CLIENT, not by the bytes
+
+§27.1 closed with "the risk layer's opinion of the *context*".  This session
+identified **which** context, by elimination, with a controlled A/B matrix.  One
+browser run, one Python verify, one variable changed at a time:
+
+| `Log1` issued by | fingerprint uploaded for that session | verdict |
+|---|---|---|
+| headful Chromium | by the browser (genuine) | **T001** |
+| headful Chromium | by **Python** (genuine fingerprint) | **T001** |
+| headful Chromium | none (uploads swallowed) | F001 |
+| headless Chromium | by the browser (headless fingerprint) | F001 |
+| headless Chromium | by **Python** (headful fingerprint) | F001 |
+| any pure HTTP client | by Python (genuine fingerprint) | F001 |
+
+Reading the matrix:
+
+1. **The uploads are necessary.** A session whose `Log2`/`Log3` never arrive is
+   not trusted — but a *Python-sent* upload with a byte-exact format and a
+   genuine fingerprint is accepted (row 2).  So the upload is about *content*,
+   and the transport of the upload is irrelevant.
+2. **The fingerprint in the token is irrelevant.** Row 2 mints the token from a
+   *foreign* template (a different machine's 140-field payload) and still gets
+   T001.  §5's "field 21/88 must be genuine" is therefore **not** a server
+   requirement — it is an artefact of how the earlier replay was set up.
+3. **The issuer of `Log1` is what the risk layer judges.** Headless Chromium is
+   rejected exactly like a Python client, and re-uploading a headful fingerprint
+   for a headless session does not rescue it (row 5).
+
+### 28.1 The `Log1` request is byte-identical to ours
+
+Body: 413 bytes, same parameter order, same values, only `SignatureNonce` and
+`Signature` differ — and ours verify the SDK's own captured signature bit for
+bit (§S4.1).  The `Data` param is **static**: it carries no timestamp, no
+nonce and no fingerprint.
+
+Wire headers: same names, same values, same order, and — importantly —
+**no `Origin`, no `Referer`, no `Cookie`** (the SDK issues the call in a way
+that omits `Origin`; a normal cross-origin `XMLHttpRequest` would send it).
+We replicate all of it, including the absence.
+
+**What is left is the connection itself.** The discriminator is not JA3/JA4:
+
+| client | JA3 | JA4a | extension set | ClientHello size |
+|---|---|---|---|---|
+| Chromium 120 (real) | `fc7b33f3…` | `t13d15160801` | 16 (incl. Chrome's padding extension) | 517 B |
+| `curl_cffi` `chrome120` | `fc7b33f3…` | `t13d15160801` | 16 (incl. padding) | 517 B |
+| `curl_cffi` `chrome119` | `fc7b33f3…` | `t13d15160801` | 16 | 517 B |
+
+`curl_cffi`'s `chrome119`/`chrome120` reproduce the real Chromium 120
+ClientHello down to the JA3, the JA4a, the cipher list, the extension set
+(including the padding extension Chrome emits and curl-impersonate omits) and
+the byte length — and they are **still rejected**.  The risk layer's judgement
+is therefore finer than any normalised TLS fingerprint we could reproduce
+(Chrome also randomises the extension order and the GREASE values on every
+connection, so it cannot be matching raw bytes either).
+
+### 28.2 Consequence for a token factory
+
+* the browser is needed **once per session**, not once per token;
+* N tokens can be minted from that one session (§31);
+* every token needs its **own** `InitCaptchaV3` — a `CertifyId` is
+  single-use and reusing one answers **F008 "duplicate"**;
+* the browser must run **headful**.  `--headless=new` produces sessions the
+  risk layer rejects, so the stealth layer's headless emulation is not enough:
+  the service looks at the browser itself.
+
+This is what `cmd/token-collector` now does (see §33).
+
+## 29 The device-service upload formats (Log2 / Log3), byte-exact
+
+The older analysis only decoded the *shape*; the exact bytes were wrong, and the
+service noticed:
+
+* the fingerprint was base64-encoded **twice**, so the server received a
+  base64-of-base64 string instead of a fingerprint — the device never
+  registered;
+* `Log3`'s head field 5 was sent as `2001`; the SDK sends it **empty**;
+* `Log2`'s head field 5 is the **GatherCost** and must equal the token's `tC`;
+* `blob32` was treated as an opaque rotating constant; it is **derived**:
+
+```
+blob32 = AES-128-CBC(sessionKey, IV, PKCS7("W.10055#saf-captcha#<sceneId>"))
+```
+
+  (three independent live captures, three different session keys, all
+  reproduced exactly — the previously hard-coded value belonged to a different
+  session and was therefore always wrong).
+
+With the malformed `Log3` the device service answered **HTTP 500**; with the
+correct one it answers **200**.  The full layout is in §S4.3.
+
+## 30 Credential facts (both spellings work)
+
+* the captcha-service pair the code ships (`LTAI5tSEBwYMwVKAQGpxmvTd` /
+  `YSKfst7GaVkXwZYvVihJsKF9r89koz`) still works, and so does the pair the
+  live SDK ships (`111jdk439dJJIjd023823201` /
+  `222aiJodos2938JDdosko2djd82sf0`) — verified by reproducing the SDK's own
+  captured `InitCaptchaV3` signature with the live pair;
+* the device-service pair (`DuaneAprqkYsF3nt1yjK29Bf` /
+  `DuanemHmyeE6LXCC46sJEDUw5DTlSZ`) is current — verified the same way;
+* the parameter name `AaduaneId` is what the SDK sends; `AccessKeyId` is
+  accepted too (both were exercised against the live endpoints).
+
+## 31 One session → N tokens, and how long a session lives
+
+`live_validate.py --session-mint N --session <collector export>` mints N tokens
+from ONE session and verifies each with its own `CertifyId`:
+
+```
+session#1 … T001   session#2 … T001   session#3 … T001
+SESSION-MINT RESULT: 3/3 tokens accepted (same device session, own CertifyId each)
+```
+
+A dedicated longevity probe minted one token every two minutes for 35 minutes
+from a single harvested session, **with the browser already closed**:
+
+```
+t+   3s … T001   t+ 1227s … T001   t+ 1960s … T001
+t+ 126s … T001   t+ 1350s … T001   t+ 2083s … T001
+… 18/18 T001
+```
+
+⇒ a harvested session is good for **at least ~35 minutes**, and the browser
+does not have to stay alive.  The upper bound was not reached; the collector
+therefore re-harvests after `--session-max-age` (default 15 min).
+
+## 32 HC1 must be a window, not an equality
+
+The archived capture has `sessionId`'s embedded ts == `serverTs − 1` and the
+analysis turned that into an equality check.  The 2026-10-21 live session has
+`serverTs − 2`.  The device service emits both fields itself, so the gap is not
+constant; the invariant is "the embedded ts trails the DeviceConfig's
+`serverTs` by ≤ 3 s".  `device_token_gen.build_payload` and
+`live_validate.build_payload_live` now enforce the window (the golden-vector
+self-tests still pass, because the archived sample satisfies it).
+
+## 33 The rewritten `cmd/token-collector`
+
+Old flow: drive the Z.AI chat UI with synthetic human input, then call
+`window.z_um.getToken()` in a loop and store whatever comes out — one browser
+page per batch, for every token.
+
+New flow (**one browser visit**, then pure-Go minting):
+
+1. the browser opens `chat.z.ai` and boots the Aliyun-SAF captcha SDK, which
+   performs `Log1` (the trusted session) → `InitCaptchaV3` → `Log2` → `Log3`
+   (the fingerprint registration);
+2. the collector captures the `Log1` response (the `DeviceConfig`) and **one**
+   genuine device token, whose decrypted payload is the collector template;
+3. the browser is closed;
+4. `feilin.go` mints N tokens in-process: refresh the per-session fields
+   (42/72/87) and the per-token field 74 + the trailing 93/94 log entries,
+   AES-128-CBC-seal with the session key, assemble the 5-field token.
+
+`--session-max-age` re-harvests when the session ages out; `--export-session`
+writes the harvested session so the Python reference tooling can re-use it.
+
+The Go port is cross-checked against the Python reference in two directions:
+the golden vectors of `live_captures.md` (`cmd/token-collector/feilin_test.go`
+re-decrypts the archived `DeviceConfig` and re-seals the archived token
+byte-exactly), and live (`live_validate.py --session-mint` on the collector's
+own export → 3/3 T001).
+
+## 34 End-to-end result
+
+`cmd/token-collector` (one browser visit → 4 tokens) → `zai-api` → a real
+chat request:
+
+```
+🌐 One-off browser visit: registering this device with the FeiLin device service...
+✅ Trusted device session 3795d282…-h-1792574091284-… (key 3780c2097f062881) from 155 field payload template
+⚙️  Minting 4 device tokens from the harvested session (no further browser use)...
+✅ Minted 4 unique device tokens in 0.00s
+💾 Database: tokens.sqlite (4.0 KB) — 4 tokens total across 1 batch(es)
+```
+
+```
+[Captcha] → computing CaptchaVerifyParam (in-memory IPC)
+[Captcha] ✓ got 280b in 2.4s          <- VerifyCaptchaV3 returned a securityToken
+```
+
+and the chat request answered with the model's reply.  The token was consumed
+FIFO and deleted, as the bridge expects.
+
+## 35 Residual risks / what is still open
+
+* **The trust check itself is opaque.**  We can reproduce the request bytes,
+  the headers, the TLS ClientHello shape, the upload formats and the
+  fingerprint — and a pure HTTP client is still rejected.  The only client we
+  know the service accepts is a real, headful browser.
+* **A headless server cannot run the collector** without a display (Xvfb is
+  enough) — and `--headless` must NOT be used, because those sessions are
+  rejected (§28).
+* **The payload field count varies** with the SDK build and with how many
+  probes finished (111 cold / 140 archived / 155 warm).  The Go port follows
+  the template it harvested and never hard-codes a count.
+* **The session has a server-side lifetime** we only bounded from below
+  (~35 min).  The collector re-harvests on `--session-max-age`.
+* **The `arg` constant of the current `dynamicJS` is still unknown** (§27.3) —
+  but the service does not validate it: a stale constant verified T001 in the
+  Session-4 runs.

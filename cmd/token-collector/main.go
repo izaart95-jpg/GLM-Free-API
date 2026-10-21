@@ -1,7 +1,24 @@
 // cmd/token-collector/main.go
 //
-// Standalone binary that seeds tokens.sqlite with device tokens harvested
-// from chat.z.ai.
+// Standalone binary that seeds tokens.sqlite with device tokens for the
+// Z.AI bridge.
+//
+// HOW IT WORKS NOW (2026-10-21 rewrite)
+//
+//	The browser is used exactly ONCE, briefly.  It boots the Aliyun-SAF captcha
+//	SDK on chat.z.ai so the FeiLin device service issues this device a
+//	*trusted* session (Log1) and the device uploads its collector fingerprint
+//	(Log2/Log3).  The visit also yields the genuine collector payload.
+//
+//	Every device token is then minted in-process: the payload is refreshed
+//	(per-session timestamps + the trailing probe-log entries), AES-128-CBC
+//	sealed with the session key and assembled into the 5-field token.
+//
+//	Why the browser cannot be dropped: the risk layer trusts a device session
+//	only when the Log1 that created it came from a client it accepts as a real
+//	browser (the request bytes are byte-identical to the SDK's - it is the
+//	*client* that is judged) and once the device registered its fingerprint for
+//	that session.  See .assets/reports/aliyun-captcha-report.md.
 //
 // Build commands (pick one):
 //
@@ -19,6 +36,7 @@
 //   ./token-collector --unsafe         # 1500 tokens, 25 batches max
 //   ./token-collector --tokens 750 --batch 3
 //   ./token-collector --headed         # visible browser for debugging
+//   ./token-collector --session-max-age 30m   # reuse the session longer
 
 package main
 
@@ -27,7 +45,6 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -46,21 +63,14 @@ import (
 
 // ---------- Configuration ----------
 const (
-	MaxTokens                = 1500
-	UnsafeMaxTokens          = 1500
-	DefaultTokens            = 850
-	DefaultBatch             = 5
-	MaxBatch                 = 9
-	UnsafeMaxBatch           = 25
-	SendWaitMs               = 12000
-	MaxRetries               = 3
-	TokenCollectionTimeoutMs = 90000
-	URL                      = "https://chat.z.ai"
-
-	// The model selector button's id encodes the selected model (e.g.
-	// model-selector-x-preview-l-button), so it is matched by prefix
-	// instead of a fixed id.
-	ModelSelectorButton = `button[id^="model-selector-"][id$="-button"]`
+	MaxTokens       = 1500
+	UnsafeMaxTokens = 1500
+	DefaultTokens   = 850
+	DefaultBatch    = 5
+	MaxBatch        = 9
+	UnsafeMaxBatch  = 25
+	MaxRetries      = 3
+	URL             = "https://chat.z.ai"
 
 	// Parallel workers = parallel PAGES on a single browser (not parallel browsers)
 	MaxParallel       = 3
@@ -75,13 +85,24 @@ const (
 
 // ---------- Flags ----------
 var (
-	unsafeFlag        = flag.Bool("unsafe", false, "increase token limit to 1500 and batch limit to 25")
-	tokensFlag        = flag.Int("tokens", 0, "tokens per batch (0 = prompt)")
-	batchFlag         = flag.Int("batch", 0, "number of batches (0 = prompt)")
-	headedFlag        = flag.Bool("headed", false, "show browser window for debugging")
+	unsafeFlag = flag.Bool("unsafe", false, "increase token limit to 1500 and batch limit to 25")
+	tokensFlag = flag.Int("tokens", 0, "tokens per batch (0 = prompt)")
+	batchFlag  = flag.Int("batch", 0, "number of batches (0 = prompt)")
+	headedFlag = flag.Bool("headed", true,
+		"show the browser window (default; headless device sessions are rejected "+
+			"by the Aliyun risk layer, so headless tokens do not verify)")
 	parallelFlag      = flag.Int("parallel", 0, "parallel workers (pages) on a single browser; 0 = prompt y/N")
 	blockTrackersFlag = flag.Bool("block-trackers", false, "enable URL allowlist filter to block trackers (off by default)")
 	noTUIFlag         = flag.Bool("no-tui", false, "disable TUI, use plain text output")
+	exportSessionFlag = flag.String("export-session", "",
+		"write the harvested device session + genuine payload template to this JSON file "+
+			"(consumable by .assets/scripts/live_validate.py --session-mint)")
+	sessionMaxAgeFlag = flag.Duration("session-max-age", 15*time.Minute,
+		"how long a harvested device session may be reused before the browser is used again "+
+			"(the device session has a server side lifetime; live traffic measured >= 35 min)")
+	headlessFlag = flag.Bool("headless", false,
+		"force the browser headless (NOT recommended: the Aliyun risk layer rejects "+
+			"headless device sessions, so the minted tokens will not verify)")
 )
 
 // ---------- init: tune GC for throughput ----------
@@ -800,274 +821,32 @@ const stealthJSTemplate = `(function () {
     } catch (e) {}
 })();`
 
-// =====================================================================
-// HUMAN INPUT SYNTHESIS — anti-bot systems watch pointer trajectories,
-// dwell times, and typing cadence. Synthesize them.
-// =====================================================================
-
-var humanRand = rand.New(rand.NewSource(time.Now().UnixNano()))
-
-func jitter(min, max float64) float64 {
-	return min + humanRand.Float64()*(max-min)
-}
-
-func humanPause(msMin, msMax int) {
-	time.Sleep(time.Duration(jitter(float64(msMin), float64(msMax))) * time.Millisecond)
-}
-
-// humanMouseTo sweeps the cursor from a random point toward (tx,ty) with
-// smoothstep easing and per-step jitter — mimics a human pointer path.
-func humanMouseTo(page playwright.Page, tx, ty float64) error {
-	x := jitter(300, 1500)
-	y := jitter(200, 800)
-	steps := 12 + humanRand.Intn(10)
-	for i := 1; i <= steps; i++ {
-		t := float64(i) / float64(steps)
-		e := t * t * (3 - 2*t) // smoothstep: slow → fast → slow
-		nx := x + (tx-x)*e + jitter(-6, 6)
-		ny := y + (ty-y)*e + jitter(-6, 6)
-		if err := page.Mouse().Move(nx, ny); err != nil {
-			return err
-		}
-		time.Sleep(time.Duration(jitter(8, 22)) * time.Millisecond)
+// ---------- Collect tokens: one brief browser visit, then programmatic minting ----------
+//
+// The device session minted by the FeiLin device service is only "trusted"
+// when the Log1 request that created it came from a client the risk layer
+// accepts as a real browser, and once the device has uploaded its
+// fingerprint (Log2/Log3) for that session.  No pure HTTP client can satisfy
+// that, so the browser is used exactly once, briefly, to register the device
+// and to capture the genuine collector payload.  Every token is then minted
+// in-process (see feilin.go) - the browser is not consulted again.
+//
+// The one thing that still needs the browser is the session itself, and the
+// session has a server side lifetime, so it is re-harvested when it ages out
+// (--session-max-age, default 15 min; live traffic measured >= 35 min).
+func collectTokens(minter *sessionMinter, total int, maxAge time.Duration) ([]string, error) {
+	if err := minter.ensure(maxAge); err != nil {
+		return nil, err
 	}
-	// Final exact landing on the target.
-	return page.Mouse().Move(tx, ty)
-}
-
-// humanClick moves the cursor along an eased path to a random point inside
-// the element, dwells briefly (decision time), then presses and releases.
-func humanClick(page playwright.Page, loc playwright.Locator) error {
-	box, err := loc.BoundingBox()
-	if err != nil {
-		return err
-	}
-	if box == nil {
-		return fmt.Errorf("element has no bounding box")
-	}
-	cx := box.X + box.Width*jitter(0.35, 0.65)
-	cy := box.Y + box.Height*jitter(0.35, 0.65)
-	if err := humanMouseTo(page, cx, cy); err != nil {
-		return err
-	}
-	humanPause(60, 180) // dwell: "reading" the button before committing
-	if err := page.Mouse().Down(); err != nil {
-		return err
-	}
-	humanPause(45, 110) // human press-hold duration
-	return page.Mouse().Up()
-}
-
-// ---------- Collect tokens on a single page ----------
-func collectTokensOnPage(page playwright.Page, total int) ([]string, error) {
-	// The page is reused across batches; route handlers (if any) were installed
-	// once at page creation in newWorkerPage. Each call here force-reloads
-	// the page by re-navigating to URL.
-	if _, err := page.Goto(URL, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(60000),
-	}); err != nil {
-		return nil, fmt.Errorf("goto: %w", err)
-	}
-
-	// Wait for both elements concurrently
-	tuiSetStatus("Locating UI elements...")
-	fmt.Println("  Locating UI elements in parallel...")
-	var (
-		err1, err2 error
-		wg         sync.WaitGroup
-	)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		err1 = page.Locator(ModelSelectorButton).First().WaitFor(
-			playwright.LocatorWaitForOptions{Timeout: playwright.Float(15000)},
-		)
-	}()
-	go func() {
-		defer wg.Done()
-		err2 = page.Locator("#chat-input").WaitFor(
-			playwright.LocatorWaitForOptions{Timeout: playwright.Float(15000)},
-		)
-	}()
-	wg.Wait()
-
-	if err1 != nil {
-		return nil, fmt.Errorf("model button not found: %w", err1)
-	}
-	if err2 != nil {
-		return nil, fmt.Errorf("textarea not found: %w", err2)
-	}
-	fmt.Println("✅ Model button & textarea found")
-	// --- Select the x-preview-l model ---
-	// The button id encodes the currently selected model (e.g.
-	// model-selector-x-preview-l-button), so match by prefix, not a fixed id.
-	modelBtn := page.Locator(ModelSelectorButton).First()
-	modelBtnID, _ := modelBtn.GetAttribute("id")
-	if strings.Contains(modelBtnID, "x-preview-l") {
-		// x-preview-l persisted from a previous batch — nothing to switch.
-		fmt.Println("✅ x-preview-l already selected — skipping model switch")
-	} else {
-		if err := humanClick(page, modelBtn); err != nil {
-			return nil, fmt.Errorf("human click on model button: %w", err)
-		}
-		humanPause(150, 400)
-
-		// bits-ui/Radix-style menu — wait for the panel to actually open.
-		menu := page.Locator("[data-dropdown-menu-content][data-state='open']")
-		if err := menu.WaitFor(
-			playwright.LocatorWaitForOptions{Timeout: playwright.Float(10000)},
-		); err != nil {
-			return nil, fmt.Errorf("model dropdown did not open: %w", err)
-		}
-
-		modelOpt := page.Locator(`button[data-value="x-preview-l"]`)
-		if err := modelOpt.WaitFor(
-			playwright.LocatorWaitForOptions{Timeout: playwright.Float(5000)},
-		); err != nil {
-			return nil, fmt.Errorf("x-preview-l option not found: %w", err)
-		}
-
-		// The target option can sit below the fold of the max-h-[292px]
-		// scroll list. Hover the cursor OVER the list (so the wheel scrolls
-		// the list, not the page body), then wheel down like a human until
-		// the option's box is fully inside the visible list area.
-		list := menu.Locator("div.overflow-y-auto")
-		listBox, err := list.BoundingBox()
-		if err != nil || listBox == nil {
-			return nil, fmt.Errorf("model list not measurable: %v", err)
-		}
-		_ = humanMouseTo(page, listBox.X+listBox.Width*jitter(0.3, 0.7), listBox.Y+listBox.Height*0.5)
-		humanPause(100, 250)
-
-		visible := func() bool {
-			gb, err := modelOpt.BoundingBox()
-			return err == nil && gb != nil &&
-				gb.Y >= listBox.Y+2 &&
-				gb.Y+gb.Height <= listBox.Y+listBox.Height-2
-		}
-		for i := 0; i < 8 && !visible(); i++ {
-			if err := page.Mouse().Wheel(0, jitter(90, 160)); err != nil {
-				return nil, fmt.Errorf("wheel scroll: %w", err)
-			}
-			humanPause(90, 220)
-		}
-		if !visible() {
-			// Fallback: programmatic scroll — still followed by a trusted click.
-			if err := modelOpt.ScrollIntoViewIfNeeded(
-				playwright.LocatorScrollIntoViewIfNeededOptions{Timeout: playwright.Float(3000)},
-			); err != nil {
-				return nil, fmt.Errorf("scroll x-preview-l into view: %w", err)
-			}
-			humanPause(100, 250)
-		}
-
-		if err := humanClick(page, modelOpt); err != nil {
-			return nil, fmt.Errorf("human click on x-preview-l: %w", err)
-		}
-		fmt.Println("✅ Model switched to x-preview-l")
-
-		// Menu closes on selection — give it a moment to settle.
-		_ = menu.WaitFor(playwright.LocatorWaitForOptions{
-			State:   playwright.WaitForSelectorStateHidden,
-			Timeout: playwright.Float(3000),
-		})
-		humanPause(200, 500)
-	}
-
-	textarea := page.Locator("#chat-input")
-
-	// --- Behavioral warm-up: nobody lands on a page and instantly acts ---
-	tuiSetStatus("Simulating human interaction...")
-	fmt.Println("🧍 Human warm-up: cursor drift + micro-scroll...")
-	_ = humanMouseTo(page, jitter(500, 1300), jitter(250, 650))
-	humanPause(300, 800)
-	_ = page.Mouse().Wheel(0, jitter(120, 320))
-	humanPause(180, 450)
-	_ = page.Mouse().Wheel(0, -jitter(60, 180))
-	humanPause(250, 600)
-
-	// Click into the textarea like a person, then type character by
-	// character with irregular inter-key delays.
-	if err := humanClick(page, textarea); err != nil {
-		return nil, fmt.Errorf("human click on textarea: %w", err)
-	}
-	humanPause(120, 300)
-	for _, r := range "__" {
-		if err := page.Keyboard().Type(string(r)); err != nil {
-			return nil, fmt.Errorf("type char: %w", err)
-		}
-		humanPause(50, 140)
-	}
-	fmt.Println(`✅ Typed "__" with human-like cadence`)
-
-	sendBtn := page.Locator("#send-message-button")
-	if err := sendBtn.WaitFor(
-		playwright.LocatorWaitForOptions{Timeout: playwright.Float(5000)},
-	); err != nil {
-		return nil, fmt.Errorf("send button not found: %w", err)
-	}
-	humanPause(200, 500) // brief hesitation before firing
-	if err := humanClick(page, sendBtn); err != nil {
-		return nil, fmt.Errorf("human click on send: %w", err)
-	}
-	fmt.Println("✅ Send clicked (eased mouse path + button dwell)")
-
-	fmt.Printf("⏳ Waiting %dms for token endpoint to initialize...\n", SendWaitMs)
-	sleep(SendWaitMs)
-
-	// ---------- Fast token collection with timeout ----------
-	tuiSetStatus(fmt.Sprintf("Collecting %d tokens...", total))
-	fmt.Println("🚀 Collecting tokens...")
+	tuiSetStatus(fmt.Sprintf("Minting %d device tokens...", total))
+	fmt.Printf("⚙️  Minting %d device tokens from the harvested session (no further browser use)...\n", total)
 	t0 := time.Now()
-
-	type evalResult struct {
-		val interface{}
-		err error
+	toks, err := minter.mint(total)
+	if err != nil {
+		return nil, err
 	}
-	resultCh := make(chan evalResult, 1)
-
-	go func() {
-		val, err := page.Evaluate(`async (args) => {
-            const total = args.total;
-            const out = new Array(total);
-            for (let i = 0; i < total; i++) {
-                const tok = window.z_um.getToken();
-                out[i] = (tok && typeof tok.then === 'function') ? await tok : tok;
-                if (i % 50 === 0) {
-                    await new Promise(r => setTimeout(r, 0));
-                }
-            }
-            return out;
-        }`, map[string]interface{}{"total": total})
-		resultCh <- evalResult{val, err}
-	}()
-
-	select {
-	case res := <-resultCh:
-		if res.err != nil {
-			return nil, fmt.Errorf("evaluate: %w", res.err)
-		}
-		arr, ok := res.val.([]interface{})
-		if !ok {
-			return nil, fmt.Errorf("unexpected evaluate result type: %T", res.val)
-		}
-		// Pre-allocate with exact capacity — avoids slice growth reallocations.
-		tokens := make([]string, 0, len(arr))
-		for _, v := range arr {
-			if s, ok := v.(string); ok {
-				tokens = append(tokens, s)
-			} else if v != nil {
-				tokens = append(tokens, fmt.Sprintf("%v", v))
-			}
-		}
-		elapsed := time.Since(t0).Seconds()
-		fmt.Printf("✅ Collected %d tokens in %.2fs\n", len(tokens), elapsed)
-		return tokens, nil
-
-	case <-time.After(TokenCollectionTimeoutMs * time.Millisecond):
-		return nil, fmt.Errorf("⏱️ token collection timed out after %ds", TokenCollectionTimeoutMs/1000)
-	}
+	fmt.Printf("✅ Minted %d unique device tokens in %.2fs\n", len(toks), time.Since(t0).Seconds())
+	return toks, nil
 }
 
 // ---------- Create a stealth worker page with a persistent identity ----------
@@ -1123,15 +902,15 @@ func newWorkerPage(browser playwright.Browser) (playwright.BrowserContext, playw
 }
 
 // ---------- Run a single batch with retries ----------
-// Reuses the given page across batches; collectTokensOnPage force-reloads it
-// on every call (and on every retry) by re-navigating to URL.
-func runBatch(page playwright.Page, total, batchNum int) ([]string, error) {
+// The batch mints from the session the minter holds; the browser is only
+// revisited when the session has to be (re)harvested.
+func runBatch(minter *sessionMinter, total, batchNum int, maxAge time.Duration) ([]string, error) {
 	var lastErr error
 	for attempt := 1; attempt <= MaxRetries; attempt++ {
 		tuiSetStatus(fmt.Sprintf("Batch %d — attempt %d/%d", batchNum, attempt, MaxRetries))
 		fmt.Printf("\n🔄 [Batch %d] Attempt %d of %d\n", batchNum, attempt, MaxRetries)
 
-		tokens, err := collectTokensOnPage(page, total)
+		tokens, err := collectTokens(minter, total, maxAge)
 
 		if err != nil {
 			lastErr = err
@@ -1140,7 +919,8 @@ func runBatch(page playwright.Page, total, batchNum int) ([]string, error) {
 				fmt.Fprintln(os.Stderr, "🚫 All retries exhausted.")
 				break
 			}
-			fmt.Println("♻️  Retrying with a forced page reload...")
+			fmt.Println("♻️  Retrying with a fresh device registration...")
+			minter.session.SessionID = "" // force a re-harvest on the next attempt
 			continue
 		}
 		return tokens, nil
@@ -1170,18 +950,10 @@ func runParallel(browser playwright.Browser, tokenCount, batchCount, workers int
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			// Each worker keeps ONE stealth context + page open for all its
-			// batches; every batch force-reloads the page instead of opening
-			// a new one. Closing the context tears down the page with it.
-			ctx, page, perr := newWorkerPage(browser)
-			if perr != nil {
-				once.Do(func() {
-					firstErr = fmt.Errorf("worker %d page: %w", workerID, perr)
-					aborted.Store(true)
-				})
-				return
-			}
-			defer ctx.Close()
+			// Each worker owns ONE session (one browser visit) and mints all of
+			// its batches from it; the session is re-harvested only when it ages
+			// out.  The worker keeps no page open between harvests.
+			minter := &sessionMinter{browser: browser}
 			for batchNum := range batchCh {
 				// Lock-free check — no mutex contention.
 				if aborted.Load() {
@@ -1190,7 +962,7 @@ func runParallel(browser playwright.Browser, tokenCount, batchCount, workers int
 
 				fmt.Printf("\n👷 [Worker %d] starting batch %d\n", workerID, batchNum)
 
-				tokens, err := runBatch(page, tokenCount, batchNum)
+				tokens, err := runBatch(minter, tokenCount, batchNum, *sessionMaxAgeFlag)
 				if err != nil {
 					once.Do(func() {
 						firstErr = err
@@ -1253,19 +1025,26 @@ var chromiumPerfArgs = []string{
 }
 
 // ---------- Stealth browser launch ----------
-// The core trick: tell Playwright the browser is HEADED, then pass
-// --headless=new ourselves. Chromium runs the NEW headless engine — the
-// full real browser (real Blink, real GPU pipeline, real fingerprint
-// surface) minus the window — so it works on bare servers with no X
-// display, while every "headless tells" (outerWidth=0, SwiftShader,
-// missing chrome object, HeadlessChrome UA brand) are patched by the
-// init script anyway. --enable-automation is stripped from Playwright's
-// default args so the automation infobar flag never reaches the engine.
+//
+// The device session is only trusted when the risk layer accepts the CLIENT,
+// and it accepts the client by looking at the browser itself - not at the
+// request bytes (those are byte-identical to what we can send from Go) and
+// not at the UA string (the stealth script spoofs that too).  Measured live:
+//
+//	headful Chromium            -> session trusted   -> tokens verify (T001)
+//	headless Chromium (new)     -> session UNTRUSTED -> tokens fail (F001)
+//	any pure HTTP client        -> session UNTRUSTED -> tokens fail (F001)
+//
+// So the browser runs HEADED by default.  --headless still exists for
+// debugging, but the tokens it produces will not verify.
+//
+// --enable-automation is stripped from Playwright's default args so the
+// automation infobar flag never reaches the engine.
 func launchBrowser(pw *playwright.Playwright, headed bool) (playwright.Browser, error) {
 	base := append([]string{}, chromiumPerfArgs...)
 
 	if headed {
-		// Real visible window for debugging — stealth script still applies.
+		// Real visible window - the stealth script still applies.
 		return pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 			Headless:          playwright.Bool(false),
 			Args:              base,
@@ -1280,6 +1059,8 @@ func launchBrowser(pw *playwright.Playwright, headed bool) (playwright.Browser, 
 		IgnoreDefaultArgs: []string{"--enable-automation"},
 	})
 	if err == nil {
+		fmt.Fprintln(os.Stderr, "⚠️  Running headless: the Aliyun risk layer rejects headless device")
+		fmt.Fprintln(os.Stderr, "    sessions, so the minted tokens will NOT verify (F001).")
 		return b, nil
 	}
 
@@ -1394,13 +1175,10 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
 
 	// ---------- Sequential batch loop ----------
 	tuiSetStatus("Starting sequential batches...")
-	// Keep ONE stealth context + page open across all batches; each batch
-	// force-reloads the page instead of opening a new one.
-	ctx, page, err := newWorkerPage(browser)
-	if err != nil {
-		return fmt.Errorf("page create: %w", err)
-	}
-	defer ctx.Close()
+	// ONE browser visit registers the device; every batch then mints from that
+	// session.  The session is re-harvested only when it ages past
+	// --session-max-age.
+	minter := &sessionMinter{browser: browser}
 
 	totalCollected := 0
 	for b := 1; b <= batchCount; b++ {
@@ -1408,7 +1186,7 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
 		fmt.Printf("  BATCH %d of %d\n", b, batchCount)
 		fmt.Printf("══════════════════════════════════════════\n")
 
-		tokens, err := runBatch(page, tokenCount, b)
+		tokens, err := runBatch(minter, tokenCount, b, *sessionMaxAgeFlag)
 		if err != nil {
 			return err
 		}
@@ -1427,10 +1205,19 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
 		}
 	}
 
+	if *exportSessionFlag != "" {
+		if err := minter.exportSession(*exportSessionFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  session export failed: %v\n", err)
+		} else {
+			fmt.Printf("  🧾 Session exported to %s\n", *exportSessionFlag)
+		}
+	}
+
 	// ---------- Final summary ----------
 	fmt.Printf("\n══════════════════════════════════════════\n")
 	fmt.Printf("  ✅ ALL BATCHES COMPLETE\n")
 	fmt.Printf("  📦 %d batches × %d tokens = %d total collected\n", batchCount, tokenCount, totalCollected)
+	fmt.Printf("  🌐 %s\n", minter.stats())
 	if info, err := os.Stat(dbPath); err == nil {
 		fmt.Printf("  💾 %s (%.1f KB)\n", dbPath, float64(info.Size())/1024.0)
 	}
@@ -1547,7 +1334,7 @@ func main() {
 	// ---------- Run ----------
 	if !useTUI {
 		// Plain text mode — no TUI, original behaviour
-		if err := run(tokenCount, batchCount, parallelWorkers, *headedFlag); err != nil {
+		if err := run(tokenCount, batchCount, parallelWorkers, *headedFlag && !*headlessFlag); err != nil {
 			fmt.Fprintf(os.Stderr, "\n🚫 Fatal error: %v\n", err)
 			os.Exit(1)
 		}
@@ -1564,7 +1351,7 @@ func main() {
 	)
 
 	go func() {
-		err := run(tokenCount, batchCount, parallelWorkers, *headedFlag)
+		err := run(tokenCount, batchCount, parallelWorkers, *headedFlag && !*headlessFlag)
 		if err == nil {
 			tuiSetStatus("Complete!")
 		}

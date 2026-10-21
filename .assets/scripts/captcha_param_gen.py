@@ -77,12 +77,14 @@ def make_captcha_request(access_key_id, secret_key, scene_id):
     return response
 
 
-response = make_captcha_request(access_key, secret, scene)  # Device token removed
-resp_data = response.json()
-print(f"Response: {json.dumps(resp_data, indent=2)}")
+if __name__ == "__main__":
+    response = make_captcha_request(access_key, secret, scene)  # Device token removed
+    resp_data = response.json()
+    print(f"Response: {json.dumps(resp_data, indent=2)}")
 
-certify_id = resp_data["CertifyId"]
-print(f"\nCertifyId: {certify_id}")
+if __name__ == "__main__":
+    certify_id = resp_data["CertifyId"]
+    print(f"\nCertifyId: {certify_id}")
 
 # ============================================================================
 # PART 2: Generate arg field
@@ -195,31 +197,33 @@ def generate_arg(certify_id, constant="4xrihv8zb8tf1mfj"):
     return base64.b64encode(t.encode("latin-1")).decode("utf-8")
 
 
-arg_value = generate_arg(certify_id)
-print(f"arg: {arg_value}")
+if __name__ == "__main__":
+    arg_value = generate_arg(certify_id)
+    print(f"arg: {arg_value}")
 
 # ============================================================================
 # PART 3: Build Track JSON
 # ============================================================================
-current_time = int(time.time() * 1000)
-track_json = {
-    "TrackList": {
-        "mc": "",
-        "tc": "",
-        "mu": "",
-        "te": "",
-        "mp": "",
-        "tmv": "",
-        "ks": "",
-        "fi": "",
-        "startTime": current_time,
-    },
-    "TrackStartTime": current_time,
-    "VerifyTime": current_time + 300,
-    "arg": arg_value,
-}
-json_str = json.dumps(track_json, separators=(",", ":"))
-print(f"JSON: {json_str}")
+if __name__ == "__main__":
+    current_time = int(time.time() * 1000)
+    track_json = {
+        "TrackList": {
+            "mc": "",
+            "tc": "",
+            "mu": "",
+            "te": "",
+            "mp": "",
+            "tmv": "",
+            "ks": "",
+            "fi": "",
+            "startTime": current_time,
+        },
+        "TrackStartTime": current_time,
+        "VerifyTime": current_time + 300,
+        "arg": arg_value,
+    }
+    json_str = json.dumps(track_json, separators=(",", ":"))
+    print(f"JSON: {json_str}")
 
 # ============================================================================
 # PART 4: Calculate hash
@@ -262,21 +266,24 @@ def ali_hash(input_str, salt_str):
     return "".join(f"{(b & 0xFF):02x}" for b in e)
 
 
-hash_result = ali_hash(json_str, "0000")
-print(f"Hash: {hash_result}")
+if __name__ == "__main__":
+    hash_result = ali_hash(json_str, "0000")
+    print(f"Hash: {hash_result}")
 
 # ============================================================================
 # PART 5: Combine hash + json
 # ============================================================================
 
-combined = hash_result + json_str
-print(f"Combined json (first 100 chars): {combined[:100]}...")
+if __name__ == "__main__":
+    combined = hash_result + json_str
+    print(f"Combined json (first 100 chars): {combined[:100]}...")
 
 # ============================================================================
 # PART 6: zlib compress
 # ============================================================================
 
-compressed = zlib.compress(combined.encode("utf-8"))
+if __name__ == "__main__":
+    compressed = zlib.compress(combined.encode("utf-8"))
 
 # ============================================================================
 # PART 7: Final encryption
@@ -385,113 +392,180 @@ def encrypt(plaintext):
     return base64.b64encode(t.encode("latin-1")).decode("utf-8")
 
 
-final_data = base64.b64encode(compressed)
-final_value = encrypt(final_data)
-print(f"\n{'='*60}")
-print(f"FINAL VALUE (captchaVerifyParam data):")
-print(f"{'='*60}")
-print(final_value)
-print(f"{'='*60}")
+if __name__ == "__main__":
+    final_data = base64.b64encode(compressed)
+    final_value = encrypt(final_data)
+    print(f"\n{'='*60}")
+    print(f"FINAL VALUE (captchaVerifyParam data):")
+    print(f"{'='*60}")
+    print(final_value)
+    print(f"{'='*60}")
 
 # ============================================================================
 # PART 8: VerifyCaptchaV3 - Use final_value as data payload
 # ============================================================================
 
 # Prompt user for deviceToken for the verify request
-print("\nPlease provide the DeviceToken for VerifyCaptchaV3:")
-verify_device_token = input("Enter DeviceToken: ").strip()
+if __name__ == "__main__":
+    print("\nPlease provide the DeviceToken for VerifyCaptchaV3:")
+    verify_device_token = input("Enter DeviceToken: ").strip()
 
 # Build the CaptchaVerifyParam JSON structure
-captcha_verify_param = {
-    "sceneId": scene,
-    "certifyId": certify_id,
-    "deviceToken": verify_device_token,
-    "data": final_value,
-}
+if __name__ == "__main__":
+    captcha_verify_param = {
+        "sceneId": scene,
+        "certifyId": certify_id,
+        "deviceToken": verify_device_token,
+        "data": final_value,
+    }
 
 # Convert to JSON string (compact, no spaces)
-captcha_verify_param_str = json.dumps(captcha_verify_param, separators=(",", ":"))
+if __name__ == "__main__":
+    captcha_verify_param_str = json.dumps(captcha_verify_param, separators=(",", ":"))
 # Build parameters for VerifyCaptchaV3 (without Signature)
-nonce = generate_nonce()
-timestamp = get_timestamp()
+if __name__ == "__main__":
+    nonce = generate_nonce()
+    timestamp = get_timestamp()
 
-params = {
-    "AccessKeyId": access_key,
-    "Action": "VerifyCaptchaV3",
-    "Format": "JSON",
-    "SignatureMethod": "HMAC-SHA1",
-    "SignatureVersion": "1.0",
-    "Timestamp": timestamp,
-    "Version": "2023-03-05",
-    "SceneId": scene,
-    "CertifyId": certify_id,
-    "CaptchaVerifyParam": captcha_verify_param_str,
-    "SignatureNonce": nonce,
-}
+if __name__ == "__main__":
+    params = {
+        "AccessKeyId": access_key,
+        "Action": "VerifyCaptchaV3",
+        "Format": "JSON",
+        "SignatureMethod": "HMAC-SHA1",
+        "SignatureVersion": "1.0",
+        "Timestamp": timestamp,
+        "Version": "2023-03-05",
+        "SceneId": scene,
+        "CertifyId": certify_id,
+        "CaptchaVerifyParam": captcha_verify_param_str,
+        "SignatureNonce": nonce,
+    }
 
 # Generate signature using all parameters (including SignatureNonce)
-signature = generate_signature(params, secret)
-params["Signature"] = signature
+if __name__ == "__main__":
+    signature = generate_signature(params, secret)
+    params["Signature"] = signature
 
 # Build form data with URL encoding
-body = "&".join(
-    [f"{k}={urllib.parse.quote(str(v), safe='')}" for k, v in params.items()]
-)
+if __name__ == "__main__":
+    body = "&".join(
+        [f"{k}={urllib.parse.quote(str(v), safe='')}" for k, v in params.items()]
+    )
 
 # Make POST request
-response = requests.post(
-    "https://no8xfe-verify.captcha-open-southeast.aliyuncs.com/",
-    headers={
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "Referer": "",
-    },
-    data=body,
-    timeout=30,
-)
+if __name__ == "__main__":
+    response = requests.post(
+        "https://no8xfe-verify.captcha-open-southeast.aliyuncs.com/",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Referer": "",
+        },
+        data=body,
+        timeout=30,
+    )
 
-print(f"\n=== Response ===")
-print(f"Status Code: {response.status_code}")
-try:
-    response_json = response.json()
-    print(json.dumps(response_json, indent=2))
+if __name__ == "__main__":
+    print(f"\n=== Response ===")
+    print(f"Status Code: {response.status_code}")
+    try:
+        response_json = response.json()
+        print(json.dumps(response_json, indent=2))
 
-    # Check if verification was successful
-    if response_json.get("Success") and response_json.get("Result", {}).get(
-        "VerifyResult"
-    ):
-        print("\n✅ CAPTCHA Verification SUCCESSFUL!")
-        print(f"VerifyCode: {response_json['Result'].get('VerifyCode')}")
+        # Check if verification was successful
+        if response_json.get("Success") and response_json.get("Result", {}).get(
+            "VerifyResult"
+        ):
+            print("\n✅ CAPTCHA Verification SUCCESSFUL!")
+            print(f"VerifyCode: {response_json['Result'].get('VerifyCode')}")
 
-        # ============================================================================
-        # NEW: Build final JSON with certifyId, securityToken, sceneId, isSign
-        # ============================================================================
-        result = response_json.get("Result", {})
-        security_token = result.get("securityToken")
-        response_certify_id = result.get("certifyId")
+            # ============================================================================
+            # NEW: Build final JSON with certifyId, securityToken, sceneId, isSign
+            # ============================================================================
+            result = response_json.get("Result", {})
+            security_token = result.get("securityToken")
+            response_certify_id = result.get("certifyId")
 
-        if security_token and response_certify_id:
-            final_payload = {
-                "certifyId": response_certify_id,
-                "sceneId": scene,
-                "isSign": True,
-                "securityToken": security_token,
-            }
-            final_payload_json = json.dumps(final_payload, separators=(",", ":"))
-            final_payload_b64 = base64.b64encode(
-                final_payload_json.encode("utf-8")
-            ).decode("utf-8")
+            if security_token and response_certify_id:
+                final_payload = {
+                    "certifyId": response_certify_id,
+                    "sceneId": scene,
+                    "isSign": True,
+                    "securityToken": security_token,
+                }
+                final_payload_json = json.dumps(final_payload, separators=(",", ":"))
+                final_payload_b64 = base64.b64encode(
+                    final_payload_json.encode("utf-8")
+                ).decode("utf-8")
 
-            print(f"\n{'='*60}")
-            print("FINAL BASE64 ENCODED PAYLOAD:")
-            print(f"{'='*60}")
-            print(final_payload_b64)
+                print(f"\n{'='*60}")
+                print("FINAL BASE64 ENCODED PAYLOAD:")
+                print(f"{'='*60}")
+                print(final_payload_b64)
+            else:
+                print("\n⚠️ securityToken or certifyId missing from response")
+
         else:
-            print("\n⚠️ securityToken or certifyId missing from response")
+            print("\n❌ CAPTCHA Verification FAILED")
+            print(f"Message: {response_json.get('Message')}")
 
-    else:
-        print("\n❌ CAPTCHA Verification FAILED")
-        print(f"Message: {response_json.get('Message')}")
+    except Exception as e:
+        print(f"Error parsing response: {e}")
+        print(response.text)
 
-except Exception as e:
-    print(f"Error parsing response: {e}")
-    print(response.text)
+
+# ============================================================================
+# IMPORT-SAFE HELPERS
+# ============================================================================
+# The primitives above are the single source of truth for the captcha `data`
+# parameter; they are re-exported here so sibling tools do not have to import
+# this module's driver (which used to fire a live request on import).
+
+API_VERSION = "2023-03-05"
+VERIFY_ENDPOINT = "https://no8xfe-verify.captcha-open-southeast.aliyuncs.com/"
+INIT_ENDPOINT = "https://no8xfe.captcha-open-southeast.aliyuncs.com/"
+
+
+def base64_encode(data):
+    """base64 of bytes or str -> str."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    return base64.b64encode(data).decode("utf-8")
+
+
+def current_time_millis():
+    """Wall clock in milliseconds."""
+    return int(time.time() * 1000)
+
+
+def generate_uuid():
+    """A fresh UUID v4 string (the SDK's SignatureNonce format)."""
+    return str(uuid.uuid4())
+
+
+def build_data(certify_id, verify_delta_ms=300, screen_telemetry=None):
+    """Build the `data` parameter for VerifyCaptchaV3.
+
+    Mirrors what the SDK's dynamic JS produces:
+        arg   = RC4-like generate_arg(certifyId)
+        track = {"TrackList":{...,"startTime":CT},"TrackStartTime":CT,
+                 "VerifyTime":CT+delta,"arg":arg}
+        data  = RC4-like encrypt( base64( zlib( ali_hash(track,"0000") + track ) ) )
+    """
+    arg_value = generate_arg(certify_id)
+    ct = current_time_millis()
+    track_list = {"mc": "", "tc": "", "mu": "", "te": "", "mp": "",
+                  "tmv": "", "ks": "", "fi": "", "startTime": ct}
+    if screen_telemetry:
+        track_list["si"] = screen_telemetry
+    track = {
+        "TrackList": track_list,
+        "TrackStartTime": ct,
+        "VerifyTime": ct + verify_delta_ms,
+        "arg": arg_value,
+    }
+    json_str = json.dumps(track, separators=(",", ":"))
+    h = ali_hash(json_str, "0000")
+    combined = h + json_str
+    compressed = zlib.compress(combined.encode("utf-8"))
+    return encrypt(base64.b64encode(compressed))

