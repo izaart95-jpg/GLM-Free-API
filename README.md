@@ -1,51 +1,48 @@
 # GLM Bridge — Z.AI Proxy API
 
-An OpenAI- **and Anthropic-compatible** API proxy for [chat.z.ai](https://chat.z.ai). Drop it in front of any OpenAI/Anthropic-compatible tool and use Z.AI's GLM models — pure HTTP, no browser automation at runtime.
+OpenAI- **and Anthropic-compatible** API proxy for [chat.z.ai](https://chat.z.ai). Pure HTTP, no browser at runtime.
 
-**Hosted instance:** `https://glm.cognix.sryze.cc/v1` — auth `Waguri` (Bearer or `x-api-key`), runs agent mode, supports `glm-5.2` and `glm-5.3-flash`. OpenAI endpoint recommended; Anthropic works but is primitive.
+**Hosted:** `https://glm.cognix.sryze.cc/v1` — auth `Waguri` (Bearer or `x-api-key`), agent mode, supports `glm-5.2`/`glm-5.3-flash`. OpenAI endpoint recommended; Anthropic works but is primitive.
 
 ---
 
 ## Features
 
-- **Dual protocol** — OpenAI `/v1/chat/completions` + Anthropic `/v1/messages` on one server; streaming (SSE, 5 s keep-alive pings) and non-streaming
-- **Pure HTTP** — no Playwright/Selenium/browser at runtime; HTTP/2 + pooled connections; pure-Go SQLite (`modernc.org/sqlite`, no CGO)
-- **Vision (image input)** — images on both endpoints (OpenAI `image_url` parts, Anthropic `image` blocks; URL or base64). Each is downloaded/decoded, uploaded to Z.AI's file endpoint, and attached exactly like the official web client. **10 images / 50 MB each** per request. Requires `ZAI_TOKEN` (guest sessions get `401`)
-- **Throwaway sessions (context-rot guard)** — every request's chat is deleted on Z.AI (`DELETE /api/v1/chats/{chat_id}`) the moment its response completes, so no history outlives a request and the account never accumulates dead sessions
-- **Async session pool (default)** — a standing batch of pre-made sessions (`SESSION_POOL_SIZE`, default 5) is kept ready; requests grab one instantly and each consumed session is deleted + replaced, so the batch refills itself. `--sync-mode` restores the legacy per-request flow
-- **Agent mode** — translates OpenAI tools/roles into the user-only prompt Z.AI's endpoint accepts, then rewrites the model's `<<<TOOL_CALL>>>` blocks back into native `tool_calls` (OpenAI) / `tool_use` (Anthropic). Modern XML-sectioned shim (default, `<already_called>` anti-loop section included) + legacy `[ROLE: ...]` shim (opt-in)
-- **Per-model feature resolution** — resolved from Z.AI server capabilities with stored per-model overrides; `image_generation` is **always forced `false`**; `reasoning_effort` (`high`/`max`) forwarded only when the model supports it (forces `enable_thinking=true`)
-- **Live model list** — full catalog from Z.AI `/api/models` (cached 5 min, static fallback) with OpenAI-style `architecture`/modality on `/v1/models`
-- **Token pool** — device tokens minted by `cmd/token-collector` (one brief browser visit registers the device, then the tokens are produced in Go) into `tokens.sqlite`, consumed FIFO and deleted after use (up to 5 retries per captcha)
-- **Device tokens minted in Go** — one brief browser visit registers the device with Aliyun's FeiLin service; the session it returns is then reused to mint any number of device tokens in-process (AES-128-CBC payload + MD5 seal, `VerifyCaptchaV3` → **T001**), and stays verifiable for **≥35 min after the browser is closed** — no browser, no Playwright, no per-token page
-- **Background captcha cache** — with agent mode on, captcha params are pre-generated asynchronously (2 cached, 75 s TTL, auto-pauses after 3 min idle)
-- **Graceful shutdown** — CTRL+C/SIGTERM drains in-flight requests (10 s), then deletes every remaining pooled session on Z.AI before exiting (second CTRL+C force-exits)
+- **Dual protocol** — OpenAI `/v1/chat/completions` + Anthropic `/v1/messages` on one server; streaming (SSE, 5s keep-alive) + non-streaming
+- **Pure HTTP** — no Playwright/Selenium; HTTP/2 + pooled conns; pure-Go SQLite (no CGO)
+- **Vision** — images on both endpoints (OpenAI `image_url`, Anthropic `image`; URL or base64). Downloaded/decoded, uploaded to Z.AI file endpoint, attached as `files` array like official web client. **10 images / 50MB each**. Requires `ZAI_TOKEN` (guest → `401`)
+- **Throwaway sessions (context-rot guard)** — every chat deleted on Z.AI (`DELETE /api/v1/chats/{id}`) when response completes; no history outlives a request
+- **Async session pool (default)** — pre-made batch (`SESSION_POOL_SIZE`, default 5); requests grab instantly, consumed sessions deleted + replaced. `--sync-mode` restores legacy flow
+- **Agent mode** — translates OpenAI tools/roles into user-only prompt Z.AI accepts, rewrites `<<<TOOL_CALL>>>` back to native `tool_calls`/`tool_use`. Modern XML shim (default, `<already_called>` anti-loop) + legacy `[ROLE: ...]` (opt-in)
+- **Per-model feature resolution** — from Z.AI capabilities + overrides; `image_generation` always `false`; `reasoning_effort` (`high`/`max`) forwarded only if supported (forces `enable_thinking=true`)
+- **Live model list** — from Z.AI `/api/models` (cached 5min, static fallback) with OpenAI-style `architecture`/modality
+- **Token pool** — device tokens minted by `cmd/token-collector` into `tokens.sqlite`, consumed FIFO, deleted after use (up to 5 retries/captcha)
+- **Device tokens minted in Go** — one brief browser visit registers device with Aliyun FeiLin; session reused to mint any number of tokens in-process (AES-128-CBC + MD5 seal, `VerifyCaptchaV3` → **T001**), verifiable **≥35min after browser closes** — no browser/Playwright/per-token page
+- **Background captcha cache** — agent mode pre-generates captcha params async (2 cached, 75s TTL, pauses after 3min idle)
+- **Graceful shutdown** — CTRL+C/SIGTERM drains in-flight (10s), deletes remaining pooled sessions before exit (second CTRL+C force-exits)
 
 ---
 
 ## Supported Models
 
-Models are fetched live from Z.AI's `/api/models` (cached 5 min). The server keeps models from the newest down to `glm-4.7` (inclusive). The fallback list (used if Z.AI is unreachable) is:
+Fetched live from `/api/models` (cached 5min). Server keeps newest down to `glm-4.7` (inclusive). Fallback list:
 
 | Model ID | Notes |
 |---|---|
-| `glm-5.3-flash` | Lightweight flagship, premium quality, instant response |
-| `glm-5.3` | Flagship, excels at coding and long-horizon tasks |
+| `glm-5.3-flash` | Lightweight flagship, premium quality, instant |
+| `glm-5.3` | Flagship, coding + long-horizon |
 | `glm-5.2` | Previous flagship |
 | `GLM-5.1` | Older flagship |
-| `GLM-5-Turbo` | Chat, coding, and agentic tasks |
+| `GLM-5-Turbo` | Chat, coding, agentic |
 | `GLM-5v-Turbo` | Vision model |
-| `glm-4.7` | Classic high-performance model |
+| `glm-4.7` | Classic high-performance |
 
-Each `/v1/models` entry carries an OpenAI-style `architecture` object derived from server capabilities (`info.meta.capabilities`); vision models (`"vision": true`) advertise image input:
+Each `/v1/models` entry carries OpenAI-style `architecture` from capabilities (`info.meta.capabilities`); vision models (`"vision": true`) advertise image input:
 
 ```json
 {
-  "id": "GLM-5v-Turbo",
-  "object": "model",
-  "created": 1774521032,
-  "owned_by": "z-ai",
-  "display_name": "GLM-5V-Turbo",
+  "id": "GLM-5v-Turbo", "object": "model", "created": 1774521032,
+  "owned_by": "z-ai", "display_name": "GLM-5V-Turbo",
   "description": "Vision model with evolved intelligence",
   "architecture": {
     "modality": "text+image->text",
@@ -55,25 +52,24 @@ Each `/v1/models` entry carries an OpenAI-style `architecture` object derived fr
 }
 ```
 
-Text-only models report `"modality": "text->text"` / `"input_modalities": ["text"]`; `output_modalities` is always `["text"]`.
+Text-only: `"modality": "text->text"` / `"input_modalities": ["text"]`; `output_modalities` always `["text"]`.
 
 > **Notes:**
-> - No `model` in the request body → defaults to `glm-5`.
-> - Guest session (no `ZAI_TOKEN`) typically only allows `glm-5.3-flash` and `glm-4.7` — use `glm-4.7` for fast tokenless testing.
-> - `/models` (plural) returns `{ models: [...], currentModel: "glm-5.2" }` for clients expecting that shape.
+> - No `model` in body → defaults to `glm-5`.
+> - Guest (no `ZAI_TOKEN`) typically only allows `glm-5.3-flash` + `glm-4.7` — use `glm-4.7` for tokenless testing.
+> - `/models` (plural) returns `{ models: [...], currentModel: "glm-5.2" }`.
 
 ---
 
-## Getting `ZAI_TOKEN` (optional, but recommended)
+## Getting `ZAI_TOKEN` (optional, recommended)
 
-`ZAI_TOKEN` is a Z.AI JWT. Setting it skips guest initialization and unlocks all models (and vision uploads).
+Z.AI JWT. Setting it skips guest init, unlocks all models + vision uploads.
 
-1. Log in at **https://chat.z.ai**, open DevTools (`F12`) → **Application → Local Storage → https://chat.z.ai** → copy the value of key **`token`** (or run `localStorage.getItem('token')` in the Console).
-2. Export it before starting the server:
-
+1. Log in at **https://chat.z.ai**, DevTools (`F12`) → **Application → Local Storage → https://chat.z.ai** → copy key **`token`** (or `localStorage.getItem('token')`).
+2. Export:
    ```bash
-   export ZAI_TOKEN="paste-the-copied-jwt-here"        # Linux / macOS
-   $env:ZAI_TOKEN="paste-the-copied-jwt-here"          # Windows PowerShell
+   export ZAI_TOKEN="paste-jwt-here"        # Linux/macOS
+   $env:ZAI_TOKEN="paste-jwt-here"          # Windows PowerShell
    ```
 
 ---
@@ -81,26 +77,16 @@ Text-only models report `"modality": "text->text"` / `"input_modalities": ["text
 ## Getting Started
 
 ```bash
-# 1. Clone
 git clone https://github.com/izaart95-jpg/GLM-Free-API/ zai-api && cd zai-api
-
-# 2. Initialize the Go module (repo ships without go.mod by design)
-go mod init zai-api && go mod tidy
-
-# 3. Optional: playwright deps (only for the token collector, when deps are missing)
-npx playwright install-deps
-
-# 4. Generate the token database (needs a display: the risk layer rejects
-#    headless device sessions — use `xvfb-run -a` on a headless server)
-go run ./cmd/token-collector
-
-# 5. Start the server
+go mod init zai-api && go mod tidy          # repo ships without go.mod by design
+npx playwright install-deps                 # optional: only for token collector
+go run ./cmd/token-collector                # needs display (headless: xvfb-run -a)
 go run .
 ```
 
-For better performance build first: `go build -o zai-api -trimpath -gcflags="all=-l=4" -ldflags="-s -w" . && ./zai-api` (same pattern for `./cmd/token-collector`).
+Better perf: `go build -o zai-api -trimpath -gcflags="all=-l=4" -ldflags="-s -w" . && ./zai-api` (same for collector).
 
-On startup a banner shows the health URL, endpoints, and auth token. The Z.AI session initializes asynchronously — if guest init fails, the first chat request retries it.
+Startup banner shows health URL, endpoints, auth. Z.AI session initializes async — guest init failure retries on first chat.
 
 ---
 
@@ -110,14 +96,14 @@ On startup a banner shows the health URL, endpoints, and auth token. The Z.AI se
 
 | Flag | Default | Description |
 |---|---|---|
-| `--db-path` | `tokens.sqlite` | Path to the SQLite token database |
-| `--verbose` | `false` | Verbose captcha/debug logging (captcha-subsystem `logInfo`/`logError` are silent otherwise) |
-| `--agent-mode` | `false` | Enable agent mode (tools/role translation; starts the background captcha cache) |
-| `--agent-mode-variant` | `modern` | Agent shim: `modern` (recommended) or `legacy` |
-| `--agent-mode-level` | *(empty)* | Agent repair level: empty (default, stock parser only) or `ultra` (buffer + ToolParserLLM malformed-tool repair; requires `--agent-mode`) |
-| `--force-cpu` | `false` | Allow ToolParserLLM ultra repair on CPU-only hosts (degraded path; CPU inference is NOT recommended, GPU+SGLang is required otherwise) |
-| `--sync-mode` | `false` | Synchronous flow: reuse one sticky chat instead of the pre-warmed pool (still deleted + rotated) |
-| `--session-reuse-count` | `10` | How many requests one chat session serves before it is deleted on Z.AI and replaced (`1` = throwaway per request) |
+| `--db-path` | `tokens.sqlite` | SQLite token DB path |
+| `--verbose` | `false` | Verbose captcha/debug logging |
+| `--agent-mode` | `false` | Enable agent mode (tools/role translation; starts captcha cache) |
+| `--agent-mode-variant` | `modern` | `modern` (recommended) or `legacy` |
+| `--agent-mode-level` | *(empty)* | empty (stock parser) or `ultra` (buffer + ToolParserLLM repair; requires `--agent-mode`) |
+| `--force-cpu` | `false` | Allow ToolParserLLM ultra on CPU-only (degraded; GPU+SGLang required otherwise) |
+| `--sync-mode` | `false` | Synchronous: one sticky chat vs pre-warmed pool (still deleted + rotated) |
+| `--session-reuse-count` | `10` | Requests per chat before delete + replace (`1` = throwaway per request) |
 
 ### Environment Variables
 
@@ -125,46 +111,46 @@ On startup a banner shows the health URL, endpoints, and auth token. The Z.AI se
 |---|---|---|
 | `PORT` | `3001` | HTTP port |
 | `HOST` | `0.0.0.0` | Bind address |
-| `AUTH_TOKEN` | `Waguri` | Bearer / `x-api-key` token for client auth |
+| `AUTH_TOKEN` | `Waguri` | Bearer / `x-api-key` for client auth |
 | `TIMEOUT` | `300000` | Request timeout (ms) |
-| `ZAI_TOKEN` | *(empty)* | Hardcoded Z.AI JWT — skips guest initialization |
-| `AGENT_MODE` | `false` | Enable agent mode (`1`/`true`/`yes`/`on`/`modern` → modern shim, `legacy` → legacy shim) |
-| `AGENT_MODE_VARIANT` | `modern` | Shim variant override (`modern`/`legacy`; takes precedence over `AGENT_MODE`'s implicit variant) |
-| `AGENT_MODE_LEVEL` | *(empty)* | Agent repair level (`ultra` enables ToolParserLLM repair; requires `AGENT_MODE`) |
-| `FORCE_CPU` / `TOOLPARSER_LLM_FORCE_CPU` | `false` | Accept the degraded CPU inference path for ToolParserLLM ultra mode on GPU-less hosts |
-| `TOOLPARSER_LLM_CACHE_DIR` | OS cache / `./models/toolparser-llm` | Where the base-model reference and LoRA bundle are cached |
-| `TOOLPARSER_LLM_LORA_URL` | public Kaggle dataset zip | Override for the LoRA bundle download (adapter weights + config) |
-| `TOOLPARSER_LLM_LORA_PATH` | *(empty)* | Local LoRA bundle override: directory containing `adapter_model.safetensors` + `adapter_config.json`, or a zip file (skips download; air-gapped friendly) |
-| `TOOLPARSER_LLM_BASE_PATH` | *(empty)* | Local base-model snapshot dir (unset = resolve `Qwen/Qwen2.5-0.5B-Instruct` via SGLang/HF) |
-| `TOOLPARSER_LLM_SGLANG_ADDR` | `127.0.0.1:30000` | Address the SGLang server is started on / reached at |
-| `TOOLPARSER_LLM_LORA_SHA256` | *(empty)* | Optional pinned SHA256 for the downloaded LoRA zip (mismatch aborts) |
-| `TOOLPARSER_LLM_REFRESH` | *(empty)* | Set to `1` to force re-download of the LoRA bundle despite a valid cache |
-| `TOOLPARSER_LLM_PYTHON` | `python3` | Python executable used to launch SGLang |
-| `LOG_LEVEL` | `debug` | `debug` dumps every Z.AI request/response, SSE lines, and headers |
+| `ZAI_TOKEN` | *(empty)* | Hardcoded Z.AI JWT — skips guest init |
+| `AGENT_MODE` | `false` | `1`/`true`/`yes`/`on`/`modern` → modern; `legacy` → legacy |
+| `AGENT_MODE_VARIANT` | `modern` | Override variant (precedence over `AGENT_MODE`) |
+| `AGENT_MODE_LEVEL` | *(empty)* | `ultra` enables ToolParserLLM repair (requires `AGENT_MODE`) |
+| `FORCE_CPU` / `TOOLPARSER_LLM_FORCE_CPU` | `false` | Accept degraded CPU path for ultra on GPU-less hosts |
+| `TOOLPARSER_LLM_CACHE_DIR` | OS cache / `./models/toolparser-llm` | Base-model + LoRA cache |
+| `TOOLPARSER_LLM_LORA_URL` | public Kaggle zip | Override LoRA bundle download |
+| `TOOLPARSER_LLM_LORA_PATH` | *(empty)* | Local LoRA dir (`adapter_model.safetensors` + `adapter_config.json`) or zip (air-gapped) |
+| `TOOLPARSER_LLM_BASE_PATH` | *(empty)* | Local base-model snapshot (unset = resolve `Qwen/Qwen2.5-0.5B-Instruct` via SGLang/HF) |
+| `TOOLPARSER_LLM_SGLANG_ADDR` | `127.0.0.1:30000` | SGLang address |
+| `TOOLPARSER_LLM_LORA_SHA256` | *(empty)* | Pinned SHA256 for LoRA zip (mismatch aborts) |
+| `TOOLPARSER_LLM_REFRESH` | *(empty)* | `1` = force re-download LoRA despite cache |
+| `TOOLPARSER_LLM_PYTHON` | `python3` | Python for SGLang |
+| `LOG_LEVEL` | `debug` | `debug` dumps every Z.AI req/resp, SSE lines, headers |
 | `LOG_FORMAT` | `text` | Log format |
-| `STREAM_HOLDBACK` | `24` | Runes held back at a live stream's tail to absorb Z.AI `edit_content` backtracks before they reach the client (`0` disables; issue #23) |
-| `SYNC_MODE` | `false` | Synchronous session flow (one sticky reused chat, no pre-warmed pool) |
-| `SESSION_POOL_SIZE` | `5` | Standing batch of ready chat sessions |
-| `SESSION_ACQUIRE_TIMEOUT` | `10` | Seconds to wait for a pooled session before creating one directly (`0` = wait forever) |
-| `SESSION_REUSE_COUNT` | `10` | Requests served per chat session before delete + replace (`1` = throwaway per request; reuse looks human and avoids WAF bot flags) |
-| `UPSTREAM_MIN_INTERVAL_MS` | *(random 200–500)* | Minimum gap between consecutive requests to Z.AI / Aliyun — paces bursts so the Aliyun WAF doesn't block the egress IP (issue #20). The gap is enforced by **one shared gate across all upstream transports** (Z.AI + Aliyun captcha), so alternating calls between the two cannot collapse the real inter-request gap to zero (issue #41). Default is drawn randomly in `[200, 500]` ms per transport (a fixed gap is a fingerprint); `0` disables pacing |
-| `TOKEN_COUNT_TTL_MS` | `5000` | How long the `/health` token count stays cached before the next probe re-queries the active database (`TOKEN_COUNT_TTL_MS <= 0` keeps the default) |
+| `STREAM_HOLDBACK` | `24` | Runes held at live stream tail to absorb `edit_content` backtracks (`0` disables; issue #23) |
+| `SYNC_MODE` | `false` | Sync session flow (one sticky reused chat, no pool) |
+| `SESSION_POOL_SIZE` | `5` | Standing ready-session batch |
+| `SESSION_ACQUIRE_TIMEOUT` | `10` | Seconds to wait for pooled session before creating directly (`0` = forever) |
+| `SESSION_REUSE_COUNT` | `10` | Requests per session before delete + replace (`1` = throwaway; reuse looks human, avoids WAF bot flags) |
+| `UPSTREAM_MIN_INTERVAL_MS` | *(random 200–500)* | Min gap between upstream requests — paces bursts to avoid Aliyun WAF IP blocks (issues #20, #41). One **shared gate across all transports** (Z.AI + Aliyun captcha) so alternating calls can't collapse the gap. Random default is a fingerprint-avoidance measure; `0` disables |
+| `TOKEN_COUNT_TTL_MS` | `5000` | `/health` token count cache TTL (`<=0` keeps default) |
 
 ---
 
-## Session Lifecycle — Reused Sessions & the Session Pool
+## Session Lifecycle — Reused Sessions & Pool
 
-OpenAI-compatible clients are **stateless** — they re-send the whole conversation every request, and the bridge forwards it inside a `chat_id` that materializes server-side. Leaving those chats behind would fill the account with dead sessions, and one-chat-per-message looks like bot behaviour to the Aliyun WAF (IP block). So each session is **reused up to `SESSION_REUSE_COUNT` (default 10) requests** — one chat carrying several turns, like a human — then deleted via `DELETE /api/v1/chats/{chat_id}` and replaced. Deletion is idempotent — Z.AI's `{"detail":"We could not find what you're looking for :/"}` counts as success. Reuse is safe: verified e2e that isolated single-turn payloads build no server-side history on a shared `chat_id`.
+OpenAI clients are **stateless** — they re-send the whole conversation every request; bridge forwards it inside a `chat_id` materialized server-side. Leaving chats behind fills account with dead sessions; one-chat-per-message looks like bot behaviour to Aliyun WAF (IP block). So each session is **reused up to `SESSION_REUSE_COUNT` (default 10)** — one chat carrying several turns, like a human — then deleted via `DELETE /api/v1/chats/{id}` + replaced. Deletion is idempotent (`{"detail":"We could not find what you're looking for :/"}` = success). Reuse is safe: verified e2e that isolated single-turn payloads build no server-side history on a shared `chat_id`.
 
-- Clients never see the `chat_id`; their state lives entirely in their own `messages` array, so reuse/rotation is invisible.
+- Clients never see `chat_id`; state lives entirely in their own `messages` array — reuse/rotation invisible.
 
-**Async mode (default):** at startup the bridge pre-makes `SESSION_POOL_SIZE` (5) sessions. Requests acquire one instantly; if a burst exhausts the batch, waiters give up after `SESSION_ACQUIRE_TIMEOUT` (10 s) and create a session directly. Each pooled session is stocked straight back into the batch until it hits `SESSION_REUSE_COUNT`, then deleted + replaced. Z.AI chat IDs are client-generated UUIDs (a chat only materializes on first completion), so warmup is instant/local and unconsumed sessions never touch the account.
+**Async (default):** startup pre-makes `SESSION_POOL_SIZE` (5). Requests acquire instantly; burst exhausts batch → waiters give up after `SESSION_ACQUIRE_TIMEOUT` (10s) and create directly. Each pooled session restocked until `SESSION_REUSE_COUNT`, then deleted + replaced. Z.AI chat IDs are client-generated UUIDs (chat materializes on first completion), so warmup is instant/local and unconsumed sessions never touch the account.
 
-**Sync mode:** `--sync-mode` / `SYNC_MODE=true` — one sticky chat is reused up to `SESSION_REUSE_COUNT`, then deleted + rotated; no pre-warming.
+**Sync:** `--sync-mode` / `SYNC_MODE=true` — one sticky chat reused up to `SESSION_REUSE_COUNT`, then deleted + rotated; no pre-warming.
 
-**Graceful shutdown:** CTRL+C/SIGTERM stops accepting connections, drains in-flight responses (10 s), prints `clearing all remaining sessions...`, deletes every still-pooled session (or the sticky sync session) on Z.AI, then exits. A second CTRL+C force-exits.
+**Graceful shutdown:** CTRL+C/SIGTERM stops accepting, drains in-flight (10s), prints `clearing all remaining sessions...`, deletes every still-pooled session (or sticky sync session) on Z.AI, exits. Second CTRL+C force-exits.
 
-**Observability:** `GET /status` reports pool state: `{ "mode": "async", "reuse": true, "maxUses": 10, "gc_enabled": true, "size": 5, "ready": 5 }`.
+**Observability:** `GET /status` → `{ "mode": "async", "reuse": true, "maxUses": 10, "gc_enabled": true, "size": 5, "ready": 5 }`.
 
 ---
 
@@ -174,37 +160,37 @@ OpenAI-compatible clients are **stateless** — they re-send the whole conversat
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/v1/chat/completions` | ✅ | Chat completions (streaming + non-streaming) |
+| `POST` | `/v1/chat/completions` | ✅ | Chat completions (stream + non-stream) |
 | `GET`  | `/v1/models` | ✅ | OpenAI-style model list |
-| `GET`  | `/models` | ✅ | Compact `{ models, currentModel }` shape |
+| `GET`  | `/models` | ✅ | Compact `{ models, currentModel }` |
 
 ### Anthropic-Compatible
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/v1/messages` | ✅ | Anthropic Messages API (streaming + non-streaming, tool use, thinking) |
+| `POST` | `/v1/messages` | ✅ | Messages API (stream + non-stream, tool use, thinking) |
 
-Anthropic clients authenticate via `x-api-key` (same value as `AUTH_TOKEN`); `anthropic-version` is allowed through CORS.
+Anthropic clients auth via `x-api-key` (same as `AUTH_TOKEN`); `anthropic-version` allowed through CORS.
 
 #### `/v1/chat/completions` body
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `model` | string | `glm-5` | Any ID from `/v1/models` |
-| `messages` | array | *(required)* | OpenAI-style; `content` may be a string or parts with `text`/`image_url` |
-| `stream` | bool | `true` | SSE stream when true |
+| `messages` | array | *(required)* | OpenAI-style; `content` string or parts with `text`/`image_url` |
+| `stream` | bool | `true` | SSE when true |
 | `reasoning` | bool | *(per-model)* | Enables `enable_thinking` |
-| `thinking` | object | *(per-model)* | `{"type":"enabled"}` / `{"type":"disabled"}` → `enable_thinking` |
-| `reasoning_effort` | string | *(empty)* | `"high"`/`"max"` — forwarded only if the model supports it; forces `enable_thinking=true` |
-| `tools` | array | *(empty)* | OpenAI-style tools (requires agent mode) |
-| `webSearch` / `search` | bool | *(per-model)* | Toggle the WebSearch feature (sets `auto_web_search` in the upstream `features` payload) |
-| `advancedSearch` | bool | `false` | **Advanced Search** (chat.z.ai's MCP variant of web search) — adds `"mcp_servers":["advanced-search"]` to the upstream completions payload; implies `webSearch=true` |
+| `thinking` | object | *(per-model)* | `{"type":"enabled"}`/`{"type":"disabled"}` → `enable_thinking` |
+| `reasoning_effort` | string | *(empty)* | `"high"`/`"max"` — forwarded only if supported; forces `enable_thinking=true` |
+| `tools` | array | *(empty)* | OpenAI-style (requires agent mode) |
+| `webSearch` / `search` | bool | *(per-model)* | Toggle WebSearch (sets `auto_web_search`) |
+| `advancedSearch` | bool | `false` | Advanced Search (MCP variant) — adds `"mcp_servers":["advanced-search"]`; implies `webSearch=true` |
 
 #### Image input (vision)
 
-Both endpoints accept images. The bridge extracts every image, uploads it to Z.AI (`POST /api/v1/files/`), and attaches the returned file objects as a top-level `files` array — the same payload the official web client sends. Message text is forwarded as usual; the pixels ride in `files`.
+Both endpoints accept images. Bridge extracts every image, uploads to Z.AI (`POST /api/v1/files/`), attaches returned file objects as top-level `files` array — same payload as official web client. Text forwarded as usual; pixels ride in `files`.
 
-- **OpenAI** — `image_url` parts, remote URL or base64 data URL:
+- **OpenAI** — `image_url` parts (URL or base64 data URL):
   ```json
   {"role":"user","content":[
     {"type":"text","text":"What is in this image?"},
@@ -212,7 +198,7 @@ Both endpoints accept images. The bridge extracts every image, uploads it to Z.A
     {"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw..."}}
   ]}
   ```
-- **Anthropic** — `image` blocks, `base64` or `url` source:
+- **Anthropic** — `image` blocks (`base64` or `url` source):
   ```json
   {"role":"user","content":[
     {"type":"text","text":"What is in this image?"},
@@ -221,13 +207,13 @@ Both endpoints accept images. The bridge extracts every image, uploads it to Z.A
   ]}
   ```
 
-**Limits:** max **10 images / 50 MB each** per request — exceeding either returns `400` before any upload. Images are held in memory only (no temp files). Use a vision-capable model (`architecture.input_modalities`); images on a non-vision model log a warning and forward anyway.
+**Limits:** max **10 images / 50MB each** per request — exceeding returns `400` before upload. Held in memory only (no temp files). Use vision-capable model (`architecture.input_modalities`); images on non-vision log warning + forward.
 
-> ⚠️ **Requires a real account (`ZAI_TOKEN`).** The `/api/v1/files/` upload endpoint only accepts a logged-in token. On a guest session, model listing and text completions still work, but uploads are rejected with `401` and the request fails with `400 {"message":"image processing failed: file upload unauthorized (401)"}`. Images are uploaded per request (never cached/deduplicated) and are not deleted by the bridge afterwards.
+> ⚠️ **Requires real account (`ZAI_TOKEN`).** `/api/v1/files/` upload only accepts logged-in token. Guest: listing + text completions work, but uploads → `401` → request fails `400 {"message":"image processing failed: file upload unauthorized (401)"}`. Images uploaded per request (never cached/deduped), not deleted afterwards.
 
 #### `/v1/messages` body
 
-Standard Anthropic fields: `model`, `messages`, `system`, `max_tokens`, `temperature`, `top_p`, `stop_sequences`, `stream`, `thinking`, `tools`, `reasoning_effort`. `tool_use`/`tool_result` blocks translate to/from OpenAI format internally (tool calls require agent mode). Image blocks convert to OpenAI `image_url` parts and use the shared vision pipeline.
+Standard Anthropic fields: `model`, `messages`, `system`, `max_tokens`, `temperature`, `top_p`, `stop_sequences`, `stream`, `thinking`, `tools`, `reasoning_effort`. `tool_use`/`tool_result` translate to/from OpenAI internally (tool calls require agent mode). Image blocks → OpenAI `image_url` parts via shared vision pipeline.
 
 #### Request headers
 
@@ -242,41 +228,38 @@ Standard Anthropic fields: `model`, `messages`, `system`, `max_tokens`, `tempera
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET`  | `/` | ❌ | Redirects to `/health` |
-| `GET`  | `/health` | ❌ | `200` if initialised, else `503` — now also carries a real-time `tokenCount` from the active token DB (below) |
-| `GET`  | `/status` | ❌ | Live session status (connected, userName, userId, feVersion, features, mode, sessionPool) |
+| `GET`  | `/health` | ❌ | `200` if initialized else `503` — carries real-time `tokenCount` |
+| `GET`  | `/status` | ❌ | Live session status (connected, userName, userId, feVersion, features, mode, sessionPool, waf) |
 | `GET`  | `/admin/health` | ❌ | Same as `/health` |
 | `GET`  | `/admin/stats` | ❌ | Mode, totalClients, totalRequests |
 | `GET`  | `/admin/clients` | ❌ | Client list |
-| `POST` | `/features` | ✅ | Per-model feature overrides (below) |
+| `POST` | `/features` | ✅ | Per-model feature overrides |
 | `GET`  | `/features` | ✅ | Inspect resolved features / stored states |
-| `POST` | `/sqlite` | ✅ | **Hot-swap the active token database** without restarting (below) |
+| `POST` | `/sqlite` | ✅ | Hot-swap active token DB without restart |
 | `POST` | `/stop` | ✅ | Acknowledged no-op |
 
 ---
 
 ## `/health` — Real-Time Token Count
 
-The health response includes the number of device tokens left in the active `tokens.sqlite`:
-
 ```json
 { "healthy": true, "mode": "direct", "tokenCount": 1500 }
 ```
 
-- The count is served from a small TTL cache (`TOKEN_COUNT_TTL_MS`, default **5000** ms) so frequent health probes don't turn into per-probe `SELECT COUNT(*)` queries.
-- `-1` means "unknown": no database attached, or the count query failed (e.g. the file vanished).
-- Swapping the database (`POST /sqlite`) invalidates the cache immediately — the next probe reflects the new file, not a stale value.
+- Served from TTL cache (`TOKEN_COUNT_TTL_MS`, default **5000**ms) so frequent probes don't turn into per-probe `SELECT COUNT(*)`.
+- `-1` = unknown: no DB attached or query failed.
+- DB swap invalidates cache immediately — next probe reflects new file.
 
 ## WAF Circuit Breaker (issue #41)
 
-Sustained agent traffic can trip the Aliyun WAF in front of chat.z.ai: the **egress IP** gets served the block page on `POST /api/v2/chat/completions` even though `GET /` and `GET /api/models` keep working. The block is IP-wide (a real browser on the same IP fails identically) and outlives any single request.
+Sustained agent traffic can trip Aliyun WAF: **egress IP** gets block page on `POST /api/v2/chat/completions` even though `GET /` and `GET /api/models` keep working. Block is IP-wide, outlives any single request.
 
-The bridge now handles this end-to-end:
-
-- **Shared pacing gate** — every upstream transport (Z.AI client + Aliyun captcha client) funnels through *one* process-wide slot allocator, so the minimum gap between consecutive upstream requests holds no matter which transport fires. Previously each transport paced independently, and interleaved captcha/completion/delete calls could collapse the real gap to zero.
-- **Block detection** — the block page (405/403 + the Aliyun marker HTML) is recognized and distinguished from genuine Z.AI JSON errors.
-- **Fail fast** — while the breaker is open, requests are rejected with `503` + `Retry-After` **before** a pooled session is drawn, before vision upload, and above all **before a captcha burns a harvested device token**. Chat deletions are skipped too, so a block no longer generates pointless upstream traffic that keeps it alive.
-- **Background recovery** — a prober re-checks the blocked endpoint after each cooldown, **doubling the backoff** (60 s → 30 min cap) while the block persists, and resumes traffic automatically the moment it lifts. The probe deliberately targets `POST /api/v2/chat/completions` (bare, unauthenticated, no captcha) — the endpoint the WAF actually blocks — not a path that stays open during a block.
-- **Clean client errors** — clients receive a small structured JSON error (`{"type":"overloaded_error","code":"waf_block","retryIn":"35s"}`) with a `Retry-After` header, never the raw 3 KB HTML page:
+End-to-end handling:
+- **Shared pacing gate** — every upstream transport funnels through *one* process-wide slot allocator; minimum gap holds regardless of transport. Previously independent pacing could collapse real gap to zero on interleaved calls.
+- **Block detection** — block page (405/403 + Aliyun marker HTML) recognized, distinguished from genuine Z.AI JSON errors.
+- **Fail fast** — while open, requests rejected `503` + `Retry-After` **before** pooled session drawn, vision upload, or **captcha burning a device token**. Chat deletions skipped too, so block generates no pointless upstream traffic.
+- **Background recovery** — prober re-checks blocked endpoint after cooldown, **doubling backoff** (60s → 30min cap) while block persists; resumes automatically when lifted. Probe targets `POST /api/v2/chat/completions` (bare, unauthenticated, no captcha) — the endpoint WAF actually blocks.
+- **Clean client errors** — small structured JSON never raw 3KB HTML:
 
 ```json
 { "error": { "type": "overloaded_error", "code": "waf_block",
@@ -284,56 +267,50 @@ The bridge now handles this end-to-end:
     "retryIn": "35s" } }
 ```
 
-`GET /status` exposes live breaker state:
-
+`GET /status` exposes live state:
 ```json
 "waf": { "blocked": true, "state": 1, "retryIn": "43s", "consecutiveBlocks": 3 }
 ```
 
-## `/sqlite` — Hot-Swap the Token Database
+## `/sqlite` — Hot-Swap Token DB
 
-Point the running bridge at a freshly harvested `tokens.sqlite` **without restarting** (restart would drop every in-flight request and the session pool):
+Point running bridge at fresh `tokens.sqlite` **without restarting** (restart drops in-flight + pool):
 
 ```bash
 curl -X POST http://localhost:3001/sqlite \
-  -H "Authorization: Bearer $AUTH_TOKEN" \
-  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"db_path": "/new/path/tokens.sqlite"}'
 ```
 
 Response:
-
 ```json
 { "success": true, "message": "database swapped", "db_path": "/new/path/tokens.sqlite",
   "swapped_in": "35ms", "token_count": 1500 }
 ```
 
-**Validation happens before anything live is touched.** A candidate file is rejected with `400` + a precise error if it: doesn't exist, is a directory, isn't readable, isn't a valid SQLite database, or lacks the expected `tokens` (id, token, batch) schema. A rejected candidate never disturbs the active database.
+**Validation before touching live.** Rejected `400` + precise error if: doesn't exist, is directory, unreadable, not valid SQLite, or lacks expected `tokens` (id, token, batch) schema. Rejected candidate never disturbs active DB.
 
-**The swap is graceful by construction:**
+**Graceful by construction:**
+1. Candidate validated + opened via private connection first — live swap is a single pointer exchange (tens of ms end-to-end incl. open + ping).
+2. In-flight requests keep captured handle, finish normally against old file; retired handle closed after in-flight count drains.
+3. Requests during swap **throttled** (wait microseconds for lock) then see new DB — nothing denied/failed mid-swap.
+4. Concurrent `POST /sqlite` serialised; second gets "swap already in progress — retry shortly".
 
-1. The candidate is validated and opened via its own private connection first — the live swap itself is a single pointer exchange (tens of ms end-to-end including open + ping).
-2. In-flight requests keep the database handle they captured and finish normally against the old file; the retired handle is closed only after its in-flight count drains to zero.
-3. Requests arriving *during* the swap are **throttled** (they wait for the microseconds the write lock is held) and then see the new database — nothing is denied or failed mid-swap.
-4. Concurrent `POST /sqlite` calls are serialised; the second gets an explicit "swap already in progress — retry shortly" error.
-
-Repeated swaps to the same path are supported (the collector may have rewritten the file in place).
+Repeated swaps to same path supported (collector may have rewritten file in place).
 
 ---
 
 ## `/features` — Per-Model Feature Configuration
 
-Features resolve **per model**: start from the model's server capabilities → if `IncludeAll` is set, include all capabilities except `reasoning_effort` (a support flag, not a feature) → apply stored per-model overrides → `enable_thinking` defaults `true` unless overridden. `think` is never included (only `enable_thinking` reaches the request), `reasoning_effort` is never stored (per-request only), and **`image_generation` is always forced `false`**.
+Resolves **per model**: server capabilities → if `IncludeAll`, all except `reasoning_effort` (support flag, not feature) → stored overrides → `enable_thinking` defaults `true` unless overridden. `think` never included (only `enable_thinking` reaches request), `reasoning_effort` never stored (per-request only), **`image_generation` always forced `false`**.
 
-**`GET /features`** — without query returns all per-model states; with `?model=<id>` returns the resolved `features`, stored `includeAll`/`overrides`, and raw `capabilities`:
-
+**`GET /features`** — no query = all per-model states; `?model=<id>` = resolved `features`, stored `includeAll`/`overrides`, raw `capabilities`:
 ```bash
 curl -H "Authorization: Bearer Waguri" http://localhost:3001/features
 curl -H "Authorization: Bearer Waguri" "http://localhost:3001/features?model=glm-4.7"
 ```
 
-**`POST /features`** — body must contain `model`; any other key is a feature override (camelCase auto-converts to snake_case):
-
+**`POST /features`** — body must contain `model`; other keys are overrides (camelCase → snake_case):
 ```bash
 curl -X POST http://localhost:3001/features \
   -H "Content-Type: application/json" -H "Authorization: Bearer Waguri" \
@@ -348,60 +325,58 @@ curl -X POST http://localhost:3001/features \
 | `think` | ignored — use `enable_thinking`/`reasoning`/`thinking` |
 | `reasoning_effort` | not stored — per-request only |
 
-To enable **all** server capabilities for a model (testing), add the header `Include-All-Features: true` to the POST.
+To enable **all** capabilities for a model (testing), add header `Include-All-Features: true` to POST.
 
 ---
 
 ## Agent Mode
 
-Z.AI's unofficial `/api/v2/chat/completions` only accepts `role="user"` messages — system/assistant/tool roles and OpenAI `tools`/`tool_calls` all cause `INTERNAL_ERROR`. With agent mode on (`--agent-mode` / `AGENT_MODE=true`), the bridge folds roles & tools into a user-only prompt and converts the model's `<<<TOOL_CALL>>>` output back into native `tool_calls` deltas (OpenAI) / `tool_use` blocks (Anthropic) with `finish_reason="tool_calls"` / `stop_reason="tool_use"`. **Agent mode is required for tool-calling to work** — without it, `tools` in the body are ignored. The hosted instance already runs it.
+Z.AI's unofficial `/api/v2/chat/completions` only accepts `role="user"` — system/assistant/tool roles + OpenAI `tools`/`tool_calls` cause `INTERNAL_ERROR`. With agent mode (`--agent-mode` / `AGENT_MODE=true`), bridge folds roles & tools into user-only prompt and converts `<<<TOOL_CALL>>>` output back to native `tool_calls` deltas (OpenAI) / `tool_use` blocks (Anthropic) with `finish_reason="tool_calls"` / `stop_reason="tool_use"`. **Required for tool-calling** — without it, `tools` ignored. Hosted instance already runs it.
 
-**Modern shim (default, recommended)** — folds the whole conversation + tool contract into **one XML-sectioned user message**: `<system>` (output contract), `<tools>` (definitions), a filled-in example call built from the request's first tool, `<history_summary>` (older tool exchanges summarized — anti context-rot), `<recent>` (last 6 exchanges verbatim in `<tool_exchange>` groups), `<already_called>` (deduplicated list of calls already made — anti-loop, issue #31), `<current_task>`, `<output_rules>` (the contract repeated verbatim at the tail — recency). The `<system>` contract is deliberately strict and short (issue #44): the literal block is shown on its own lines in both the head and tail sections, the parser is described as a literal scanner whose only recognized spellings are those exact byte strings, and the derailment shapes observed in the wild (`TOOL_CALL_BLOCK`, renamed markers, fenced blocks) are explicitly named discarded — paraphrasing means the tool never runs. The parser itself keeps its own tolerance (markers matched with 2–4 angle brackets, ` ```json ` fences stripped, flat/alternate payloads normalized). The fallback parsers that used to chain behind it — Zhipu's native tag dialect, envelope-less bare invocations, and a stream-end re-extraction pass over the full text — were **removed**: the strict literal contract makes the model emit exactly the block above, so the default parser alone is sufficient and the fallbacks were pure complexity.
+**Modern shim (default, recommended)** — folds conversation + tool contract into **one XML-sectioned user message**: `<system>` (output contract), `<tools>` (definitions), filled-in example from first tool, `<history_summary>` (older tool exchanges summarized — anti context-rot), `<recent>` (last 6 exchanges verbatim in `<tool_exchange>` groups), `<already_called>` (deduped calls already made — anti-loop, issue #31), `<current_task>`, `<output_rules>` (contract repeated verbatim at tail — recency). `<system>` contract deliberately strict + short (issue #44): literal block shown on own lines in head + tail, parser described as literal scanner recognizing only exact byte strings, derailment shapes (`TOOL_CALL_BLOCK`, renamed markers, fenced blocks) explicitly named discarded — paraphrasing = tool never runs. Parser keeps own tolerance (markers 2–4 angle brackets, ` ```json ` fences stripped, flat/alternate payloads normalized). Fallback parsers (Zhipu native tag dialect, envelope-less bare invocations, stream-end re-extraction) were **removed**: strict literal contract makes model emit exactly the block, so default parser alone suffices.
 
-**Streamed tool calls** — with `stream: true`, tool calls stream live like the OpenAI/Anthropic APIs: as soon as a block's `{"name": …, "arguments": {` has arrived, the client receives the header delta (`index`, `id`, `type`, `function.name`), then incremental `function.arguments` fragments (`input_json_delta` on Anthropic) while the model is still writing the JSON, closing with `finish_reason="tool_calls"` / `stop_reason="tool_use"`. There is no silent buffer window between the markers. Non-streamable shapes (arguments as a JSON-encoded string, flat payloads) still emit one complete buffered call; fragments are rune-safe, so markers and multi-byte characters split across upstream SSE chunks never garble or leak.
+**Streamed tool calls** — with `stream: true`, calls stream live like OpenAI/Anthropic: once a block's `{"name": …, "arguments": {` arrived, client gets header delta (`index`, `id`, `type`, `function.name`), then incremental `function.arguments` fragments (`input_json_delta` on Anthropic) while model still writing JSON, closing with `finish_reason="tool_calls"` / `stop_reason="tool_use"`. No silent buffer window between markers. Non-streamable shapes (arguments as JSON-encoded string, flat payloads) emit one complete buffered call; fragments rune-safe so markers/multi-byte chars split across SSE chunks never garble or leak.
 
-**Legacy shim (opt-in)** — `--agent-mode-variant=legacy` / `AGENT_MODE_VARIANT=legacy`: prepends a system-prefix user message, rewrites every non-user message as `[ROLE: <role>] ...`, and renders tools into a strict `<<<TOOL_CALL>>> {"name":...,"arguments":{...}} <<<END_TOOL_CALL>>>` contract.
+**Legacy shim (opt-in)** — `--agent-mode-variant=legacy` / `AGENT_MODE_VARIANT=legacy`: prepends system-prefix user message, rewrites every non-user message as `[ROLE: <role>] ...`, renders tools into strict `<<<TOOL_CALL>>> {"name":...,"arguments":{...}} <<<END_TOOL_CALL>>>` contract.
 
-**Ultra repair (opt-in beta, issue #44)** — `--agent-mode --agent-mode-level=ultra`: when long-horizon sessions rot the model's output and it emits a paraphrased envelope (`TOOL_CALL_BLOCK`, `<tool_call>`, fenced or flat payloads…) instead of the canonical block, a small Text-to-Tool-Call model (ToolParserLLM: Qwen2.5-0.5B-Instruct + LoRA adapter) repairs it. Pipeline per response: buffer the stream → validate against the canonical format → valid blocks pass through untouched (the repair model is never consulted) → each malformed span is isolated (surrounding prose excluded), de-noised, VAR-patched for long values (spans ≥150 chars, or ≥50 with a newline, become `VARn` sentinels and are rehydrated verbatim after), and sent to the model with the canonical spec → its output is re-validated before splicing; on any failure the original fragment is forwarded with a warning, never silently dropped. Repair is idempotent and per-span independent; every event is logged (original / extracted / model output / decision). Dormant otherwise: without *both* flags nothing is loaded, warmed up, or referenced, and default + plain `--agent-mode` behavior is byte-for-byte unchanged.
+**Ultra repair (opt-in beta, issue #44)** — `--agent-mode --agent-mode-level=ultra`: when long-horizon sessions rot output and model emits paraphrased envelope (`TOOL_CALL_BLOCK`, `<tool_call>`, fenced/flat payloads) instead of canonical block, small Text-to-Tool-Call model (ToolParserLLM: Qwen2.5-0.5B-Instruct + LoRA adapter) repairs it. Pipeline: buffer stream → validate canonical → valid blocks pass untouched (model never consulted) → each malformed span isolated (prose excluded), de-noised, VAR-patched for long values (spans ≥150 chars, or ≥50 with newline, become `VARn` sentinels, rehydrated verbatim after), sent to model with canonical spec → output re-validated before splicing; on failure original fragment forwarded with warning, never silently dropped. Repair idempotent, per-span independent; every event logged (original/extracted/model output/decision). Dormant otherwise: without *both* flags nothing loaded/warmed/referenced; default + plain `--agent-mode` byte-for-byte unchanged.
 
-Model serving: at ultra startup the bridge downloads the base-model reference and the LoRA bundle (public Kaggle dataset `zoxoashouko/v28-flagship-toolparser`: `adapter_model.safetensors` + `adapter_config.json`), verifies integrity (non-empty zip, optional pinned SHA256, weights+config present and valid JSON), caches under `TOOLPARSER_LLM_CACHE_DIR`, and loads base+LoRA via SGLang. GPU hosts serve automatically; CPU-only hosts abort with an actionable error unless `--force-cpu` / `FORCE_CPU=1` is passed (documented degraded path — slow, may exceed agent timeouts). Failures are loud: bad checksum, incomplete bundle, or an SGLang that never becomes ready all abort startup with what to check. `TOOLPARSER_LLM_LORA_PATH` / `TOOLPARSER_LLM_BASE_PATH` allow fully local/air-gapped setups.
+Model serving: at ultra startup downloads base-model reference + LoRA bundle (public Kaggle `zoxoashouko/v28-flagship-toolparser`: `adapter_model.safetensors` + `adapter_config.json`), verifies integrity (non-empty zip, optional pinned SHA256, weights+config present + valid JSON), caches under `TOOLPARSER_LLM_CACHE_DIR`, loads base+LoRA via SGLang. GPU hosts serve automatically; CPU-only abort with actionable error unless `--force-cpu` / `FORCE_CPU=1` (degraded — slow, may exceed agent timeouts). Failures loud: bad checksum, incomplete bundle, or SGLang never ready all abort startup with what to check. `TOOLPARSER_LLM_LORA_PATH` / `TOOLPARSER_LLM_BASE_PATH` allow fully local/air-gapped.
 
-Enabling agent mode also starts the background captcha cache (2 pre-generated params, 75 s TTL, pauses after 3 min idle).
+Enabling agent mode also starts background captcha cache (2 pre-generated params, 75s TTL, pauses after 3min idle).
 
 ---
 
 ## Web Search & Advanced Search (issue #42)
 
-Two separate things live behind the globe icon on chat.z.ai, and the bridge now maps both onto request flags:
+Two separate things behind globe icon on chat.z.ai; bridge maps both to request flags:
 
-**WebSearch** (`webSearch: true`, or the `search` alias) — the model's built-in search mode. Internally this sets **`auto_web_search: true`** in the upstream `features` payload. That is the only key that actually toggles the feature: the sibling `web_search` key is **always `false` upstream** — sending `true` there does nothing (the server just mirrors it back), which is why a request that "looked" enabled could silently do nothing. The bridge now always pins `features.web_search = false` and never sends `true` for it, no matter what stored overrides say.
+**WebSearch** (`webSearch: true`, alias `search`) — model's built-in search. Internally sets **`auto_web_search: true`** in upstream `features`. Only key that actually toggles it: sibling `web_search` key is **always `false` upstream** — sending `true` there does nothing (server mirrors it back), which is why a request that "looked" enabled could silently do nothing. Bridge now always pins `features.web_search = false` and never sends `true` regardless of stored overrides.
 
-**Advanced Search** (`advancedSearch: true`) — not a feature flag at all, but an **MCP server**. On the real chat.z.ai web, toggling Advanced Search makes the frontend add a new top-level field to the completions request payload:
+**Advanced Search** (`advancedSearch: true`) — not a feature flag but an **MCP server**. On real web, toggling makes frontend add top-level field:
 
 ```json
 {
-  "model": "glm-5.3",
-  "chat_id": "...",
-  "messages": [...],
+  "model": "glm-5.3", "chat_id": "...", "messages": [...],
   "captcha_verify_param": "...",
   "mcp_servers": ["advanced-search"],
   "features": { "auto_web_search": true, ... }
 }
 ```
 
-`mcp_servers` sits on the same payload level as `captcha_verify_param` (it is *not* inside `features`). When it's present, Z.AI runs the model's searches through the advanced-search MCP tools — the internal `tool_call` events (`retrieve`, `open_url`, …) you see fly by in the SSE stream are that loop at work; they're answered server-side by Z.AI itself and have nothing to do with agent-mode tool calling.
+`mcp_servers` sits at same payload level as `captcha_verify_param` (not inside `features`). When present, Z.AI runs searches through advanced-search MCP tools — internal `tool_call` events (`retrieve`, `open_url`, …) in SSE are that loop; answered server-side by Z.AI, unrelated to agent-mode tool calling.
 
-The bridge reproduces this exactly: `advancedSearch: true` adds `"mcp_servers": ["advanced-search"]` to the upstream payload and auto-enables the base web-search toggle (same coupling as the web UI, where Advanced Search hides behind the globe). Citations come back inline as `【turn0search0】` markers in the message text plus `[ref_id=...]` blocks the model quotes from — the `metadata.browser.search_result` on the internal tool responses carries the full source list (title, url, snippet, favicon) for anyone who wants to build a references panel.
+Bridge reproduces exactly: `advancedSearch: true` adds `"mcp_servers": ["advanced-search"]` + auto-enables base web-search (same coupling as web UI, Advanced Search hides behind globe). Citations come inline as `【turn0search0】` markers + `[ref_id=...]` blocks model quotes from — `metadata.browser.search_result` on internal tool responses carries full source list (title, url, snippet, favicon).
 
-**Agent-mode gate** — when agent mode is on, both search toggles are **force-disabled server-side**, even if the request asks for them. Z.AI serves WebSearch through its own internal tool-call loop; mixing that with the agent shim's tool contract makes the model emit internal markers (`retrieve`, `open_url`) as if they were the caller's tools, or refuse to search at all. The request still succeeds — it just runs without server-side search. If you need both, run tool-calling requests without the search flags and let the client's own tools fetch pages.
+**Agent-mode gate** — when agent mode on, both search toggles **force-disabled server-side**, even if requested. Z.AI serves WebSearch through own internal tool-call loop; mixing with agent shim's tool contract makes model emit internal markers (`retrieve`, `open_url`) as if they were caller's tools, or refuse to search. Request still succeeds — runs without server-side search. If you need both, run tool-calling requests without search flags and let client's own tools fetch pages.
 
-Both flags are also accepted on the Anthropic `/v1/messages` endpoint (`webSearch`, `search`, `advancedSearch` in the body) and map to the same upstream payload.
+Both flags accepted on Anthropic `/v1/messages` (`webSearch`, `search`, `advancedSearch`) and map to same upstream payload.
 
 ---
 
 ## Examples
 
-> Self-hosted examples use `glm-4.7` so they work **without** `ZAI_TOKEN`. For the hosted instance use base URL `https://glm.cognix.sryze.cc/v1`, model `glm-5.2` or `glm-5.3-flash`, same auth.
+> Self-hosted examples use `glm-4.7` (works **without** `ZAI_TOKEN`). Hosted: base URL `https://glm.cognix.sryze.cc/v1`, model `glm-5.2`/`glm-5.3-flash`, same auth.
 
 ```bash
 # OpenAI — non-streaming
@@ -421,13 +396,13 @@ curl -N -X POST http://localhost:3001/v1/messages \
 ```
 
 ```python
-# Python — OpenAI SDK (self-hosted shown; hosted: base_url="https://glm.cognix.sryze.cc/v1", model="glm-5.3-flash" or "glm-5.2")
+# OpenAI SDK (hosted: base_url="https://glm.cognix.sryze.cc/v1", model="glm-5.3-flash"/"glm-5.2")
 from openai import OpenAI
 client = OpenAI(base_url="http://localhost:3001/v1", api_key="Waguri")
 resp = client.chat.completions.create(model="glm-4.7", messages=[{"role": "user", "content": "Hello!"}])
 print(resp.choices[0].message.content)
 
-# Python — Anthropic SDK
+# Anthropic SDK
 from anthropic import Anthropic
 client = Anthropic(base_url="http://localhost:3001", api_key="Waguri")
 resp = client.messages.create(model="glm-4.7", max_tokens=1024, messages=[{"role": "user", "content": "Hello!"}])
@@ -438,109 +413,108 @@ print(resp.content[0].text)
 
 ## How It Works
 
-1. **Session init** — startup calls Z.AI `/api/v1/auths/guest` (+ `/api/v1/auths/`) for a JWT, or uses `ZAI_TOKEN`; the frontend version (`prod-fe-x.y.z`) is scraped from the homepage.
-2. **Captcha** — per request, an Aliyun `captcha_verify_param` is generated in-memory: `InitCaptchaV3` → `certifyId`; `arg` via RC4-like permutation cipher (KSA + PRGA over a 64-byte state); `Track` JSON + custom `ali_hash` (16-byte-state hash), zlib-compress, base64-encode, then a second RC4-like `encrypt` pass (different key); `VerifyCaptchaV3` with a pooled device token → `securityToken`; final `{certifyId, isSign, sceneId, securityToken}` base64-encoded. Tokens come FIFO from `tokens.sqlite` and are deleted after use (up to 5 retries). Hard 90 s timeout → `500` on failure.
-3. **Signature** — HMAC-SHA256 over `(sortedPayload | promptBase64 | timestamp)` with a salted bucket key from `SALT_KEY` and `timestamp / 300000`.
-4. **Streaming** — POST `/api/v2/chat/completions` with `stream:true`; parses SSE (`edit_content` + `edit_index`, `delta_content`, `content`, or OpenAI-style deltas) and re-emits as OpenAI/Anthropic SSE. Semantics mirror the official `prod-fe` bundle: `edit_content` replaces from `edit_index` (a **UTF-16 code-unit offset**, missing = 0 = full replace), `content` = full replace, `delta_content` = append. Deltas are cut on rune boundaries with a `STREAM_HOLDBACK` tail so backtracks never surface as garble (issue #23). Inline errors (HTTP 200 + `data.error`) are surfaced; on `401` the session re-initialises and retries once.
-5. **Session GC** — each chat is reused up to `SESSION_REUSE_COUNT` then deleted in the background (async mode restocks the pool; sync mode rotates the sticky chat). Shutdown clears all pooled/sticky sessions. See [Session Lifecycle](#session-lifecycle--reused-sessions--the-session-pool).
+1. **Session init** — startup calls Z.AI `/api/v1/auths/guest` (+ `/api/v1/auths/`) for JWT, or uses `ZAI_TOKEN`; frontend version (`prod-fe-x.y.z`) scraped from homepage.
+2. **Captcha** — per request, Aliyun `captcha_verify_param` generated in-memory: `InitCaptchaV3` → `certifyId`; `arg` via RC4-like permutation (KSA + PRGA over 64-byte state); `Track` JSON + custom `ali_hash` (16-byte-state hash), zlib-compress, base64, second RC4-like `encrypt` pass (different key); `VerifyCaptchaV3` with pooled device token → `securityToken`; final `{certifyId, isSign, sceneId, securityToken}` base64. Tokens FIFO from `tokens.sqlite`, deleted after use (up to 5 retries). Hard 90s timeout → `500`.
+3. **Signature** — HMAC-SHA256 over `(sortedPayload | promptBase64 | timestamp)` with salted bucket key from `SALT_KEY` and `timestamp / 300000`.
+4. **Streaming** — POST `/api/v2/chat/completions` with `stream:true`; parses SSE (`edit_content` + `edit_index`, `delta_content`, `content`, OpenAI-style deltas) re-emits as OpenAI/Anthropic SSE. Semantics mirror official `prod-fe` bundle: `edit_content` replaces from `edit_index` (**UTF-16 code-unit offset**, missing = 0 = full replace), `content` = full replace, `delta_content` = append. Deltas cut on rune boundaries with `STREAM_HOLDBACK` tail so backtracks never surface as garble (issue #23). Inline errors (HTTP 200 + `data.error`) surfaced; on `401` session re-initialises + retries once.
+5. **Session GC** — each chat reused up to `SESSION_REUSE_COUNT` then deleted in background (async restocks pool; sync rotates sticky chat). Shutdown clears all pooled/sticky sessions. See [Session Lifecycle](#session-lifecycle--reused-sessions--pool).
 
 ---
 
 ## Token Collection (`cmd/token-collector`)
 
-Seeds `tokens.sqlite` with device tokens for the bridge, with a Bubble Tea TUI (progress bar, live logs, spinner).
+Seeds `tokens.sqlite` with device tokens, Bubble Tea TUI (progress bar, live logs, spinner).
 
-**How it works (rewritten 2026-10-21).**  The browser is used **once, briefly**:
+**How it works (rewritten 2026-10-21).** Browser used **once, briefly**:
+1. Opens `chat.z.ai`, boots Aliyun-SAF captcha SDK registering device with FeiLin (`Log1` → `InitCaptchaV3` → `Log2` → `Log3`) → **trusted device session**;
+2. Collector grabs `Log1` response (`DeviceConfig`) + **one** genuine device token (decrypted payload = template);
+3. Browser closed;
+4. Every token then **minted in-process** (`cmd/token-collector/feilin.go`): refresh per-session fields (42/72/87) + per-token field 74 + trailing 93/94 probe-log entries, AES-128-CBC-seal with session key, assemble 5-field token.
 
-1. it opens `chat.z.ai` and boots the Aliyun-SAF captcha SDK, which registers the device with the FeiLin device service (`Log1` → `InitCaptchaV3` → `Log2` → `Log3`) and hands out a **trusted device session**;
-2. the collector grabs the `Log1` response (the `DeviceConfig`) and **one** genuine device token, whose decrypted payload is the collector template;
-3. the browser is closed;
-4. every token is then **minted in-process** (`cmd/token-collector/feilin.go`): refresh the per-session fields (42/72/87) and the per-token field 74 + the trailing 93/94 probe-log entries, AES-128-CBC-seal with the session key, assemble the 5-field token.
+Browser needed **once per session, not once per token** — one session mints arbitrary number, stays usable after browser gone (measured: 18/18 verifies over 35min no browser).
 
-The browser is needed **once per session, not once per token** — a single session mints an arbitrary number of tokens, and it stays usable after the browser is gone (measured: 18/18 verifies over 35 minutes with no browser running).
-
-> **The browser must run headful.**  The Aliyun risk layer judges the *client* that issues the device service's `Log1`: a headless browser is rejected exactly like a pure HTTP client, and the tokens it produces will not verify.  The `Log1` request bytes are byte-identical to what the SDK sends, and the fingerprint inside the token is irrelevant — a token minted from a foreign machine's payload still verifies.  See `.assets/reports/aliyun-captcha-report.md` §13 and `.assets/reports/Fielin-report.md` §28.
+> **Browser must run headful.** Aliyun risk layer judges *client* issuing device service's `Log1`: headless rejected exactly like pure HTTP client, tokens won't verify. `Log1` request bytes byte-identical to SDK; fingerprint inside token irrelevant — token minted from foreign machine's payload still verifies. See `.assets/reports/aliyun-captcha-report.md` §13 + `.assets/reports/Fielin-report.md` §28.
 
 ```bash
-go build -ldflags="-s -w" -trimpath -o token-collector ./cmd/token-collector   # portable
+go build -ldflags="-s -w" -trimpath -o token-collector ./cmd/token-collector
 # modern CPUs, fully static: CGO_ENABLED=0 GOAMD64=v3 go build -ldflags="-s -w" -trimpath -o token-collector ./cmd/token-collector
 ./token-collector                        # interactive TUI prompt
-./token-collector --tokens 750          # mint a specific number of tokens
-xvfb-run -a ./token-collector           # headless server: a virtual display is enough
+./token-collector --tokens 750          # mint specific number
+xvfb-run -a ./token-collector           # headless server: virtual display enough
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--tokens` | `0` | Device tokens to mint (0 = prompt; default 850, max 1500) |
-| `--headed` | `true` | Deprecated and ignored — the browser always runs headful (headless sessions are rejected) |
-| `--session-max-age` | `15m` | Re-harvest the device session after this long (it has a server-side lifetime) |
-| `--export-session` | *(empty)* | Write the harvested session + payload template as JSON (consumable by `.assets/scripts/live_validate.py --session-mint`) |
+| `--tokens` | `0` | Tokens to mint (0 = prompt; default 850, max 1500) |
+| `--headed` | `true` | Deprecated/ignored — always headful (headless rejected) |
+| `--session-max-age` | `15m` | Re-harvest session after this long (server-side lifetime) |
+| `--export-session` | *(empty)* | Write session + payload template as JSON (for `.assets/scripts/live_validate.py --session-mint`) |
 | `--no-tui` | `false` | Plain text output |
 
-Implementation: pure-Go SQLite (WAL, 64 MB page cache, 256 MB mmap); one browser visit per session, tokens minted in Go; TUI ring buffer (1000 lines, scroll ↑/↓ g/G).  Because minting is pure computation there is nothing to batch or parallelise: one harvested session yields the whole pool, and the only network-bound step (the harvest itself) is retried up to 3 times.
+Implementation: pure-Go SQLite (WAL, 64MB page cache, 256MB mmap); one browser visit per session, tokens minted in Go; TUI ring buffer (1000 lines, scroll ↑/↓ g/G). Pure computation → nothing to batch/parallelise: one harvested session yields whole pool; only network-bound step (harvest) retried up to 3 times.
 
-Cross-checks: `go test ./cmd/token-collector/` replays the archived golden vectors (the `DeviceConfig` decrypt and a byte-exact token re-seal), and `.assets/scripts/live_validate.py --session-mint N --session <collector export>` re-mints and re-verifies the collector's own session against the live service.
+Cross-checks: `go test ./cmd/token-collector/` replays archived golden vectors (`DeviceConfig` decrypt + byte-exact token re-seal); `.assets/scripts/live_validate.py --session-mint N --session <collector export>` re-mints + re-verifies collector's own session against live service.
 
 ---
 
 ## Project Structure
 
-Bridge core in `internal/zbridge` (mirrors the DeepseekFreeAPI layout); `main.go` is a thin entry point; blackbox tests in `tests/`, whitebox tests with their package.
+Bridge core in `internal/zbridge` (mirrors DeepseekFreeAPI layout); `main.go` thin entry; blackbox tests in `tests/`, whitebox with package.
 
 ```
 zai-api/
-├── main.go                        # Thin entry point -> zbridge.Run()
-├── internal/zbridge/              # Bridge core (package zbridge)
+├── main.go                        # Thin entry -> zbridge.Run()
+├── internal/zbridge/
 │   ├── run.go                     # Run(), NewHandler(), graceful shutdown
 │   ├── config.go                  # Config + env/flag loading
 │   ├── types.go                   # Shared types + global state
 │   ├── features.go                # Per-model feature resolution
-│   ├── util.go                    # Logging, HTTP clients, cookie jar, helpers
-│   ├── db.go                      # Hot-swappable token DB holder + count cache
+│   ├── util.go                    # Logging, HTTP clients, cookie jar
+│   ├── db.go                      # Hot-swappable token DB + count cache
 │   ├── captcha.go                 # Aliyun captcha machinery + cache
 │   ├── zai.go                     # Signature, session init, streaming, SSE parse
 │   ├── format.go                  # OpenAI response/error formatting
 │   ├── anthropic.go               # Anthropic endpoint + translation
 │   ├── middleware.go              # CORS, auth, JSON, misc handlers
-│   ├── models.go                  # Live model list + capabilities + architecture
-│   ├── vision.go                  # Image input: extract, download, upload, files payload
+│   ├── models.go                  # Live model list + capabilities
+│   ├── vision.go                  # Image extract/download/upload/files payload
 │   ├── handlers.go                # /v1/chat/completions + admin handlers
-│   ├── agent.go                   # Modern agent shim (XML-sectioned prompt)
+│   ├── agent.go                   # Modern agent shim (XML-sectioned)
 │   ├── agent_legacy.go            # Legacy [ROLE: ...] shim
 │   ├── session_pool.go            # Throwaway sessions + async pool + GC
-│   ├── ratelimit.go               # Shared upstream pacing gate (issues #20, #41)
-│   ├── waf.go                     # Aliyun WAF circuit breaker (issue #41)
-│   ├── waf_test.go                # Whitebox: breaker state machine + probe
+│   ├── ratelimit.go               # Shared upstream pacing gate (#20, #41)
+│   ├── waf.go                     # Aliyun WAF circuit breaker (#41)
+│   ├── waf_test.go                # Whitebox: breaker + probe
 │   ├── testhooks.go               # Exported seams for tests/
-│   ├── agent_test.go              # Whitebox: modern agent shim
-│   ├── db_test.go                 # Whitebox: DB holder, count TTL, graceful swap
-│   ├── sse_garble_test.go         # Whitebox: SSE parser (issue #23)
-│   ├── websearch_test.go          # Whitebox: search payload shapes + agent gate (issue #42)
+│   ├── agent_test.go              # Whitebox: modern shim
+│   ├── db_test.go                 # Whitebox: DB holder, count TTL, swap
+│   ├── sse_garble_test.go         # Whitebox: SSE parser (#23)
+│   ├── websearch_test.go          # Whitebox: search payload + agent gate (#42)
 │   └── vision_test.go             # Whitebox: url->file-id rewrite
-├── cmd/token-collector/           # Standalone binary: seeds tokens.sqlite (TUI)
-├── tests/                         # Blackbox tests (package tests)
-│   ├── session_pool_test.go       # Pool mechanics, chat-delete client, GC wiring
-│   ├── integration_test.go        # E2E HTTP garble regression (issue #23)
-│   ├── toolcall_stream_test.go    # E2E streamed tool calls (agent mode)
-│   ├── db_hotswap_test.go         # E2E /health tokenCount + /sqlite hot-swap
-│   ├── websearch_e2e_test.go      # E2E search flags -> upstream payload (issue #42)
-│   └── vision_test.go             # Vision e2e (upload + files), /v1/models, limits
+├── cmd/token-collector/           # Standalone: seeds tokens.sqlite (TUI)
+├── tests/                         # Blackbox tests
+│   ├── session_pool_test.go       # Pool mechanics, delete client, GC
+│   ├── integration_test.go        # E2E HTTP garble regression (#23)
+│   ├── toolcall_stream_test.go    # E2E streamed tool calls (agent)
+│   ├── db_hotswap_test.go         # E2E /health tokenCount + /sqlite
+│   ├── websearch_e2e_test.go      # E2E search flags -> payload (#42)
+│   └── vision_test.go             # Vision e2e (upload + files), models, limits
 └── README.md
 ```
 
-Run the suite: `go test ./...`
+Run suite: `go test ./...`
 
 ---
 
 ## Notes
 
-- The default auth token (`Waguri`) is a placeholder — set `AUTH_TOKEN` in production.
-- Device tokens are **consumed and deleted** after use — re-run the token collector to replenish (each captcha tries up to 5 tokens).
-- `--verbose` only controls the captcha subsystem's logging; standard bridge/SSE logging is gated by `LOG_LEVEL=debug`.
-- Each request gets a fresh `chat_id` — no server-side conversation persistence; the chat is deleted right after the response completes.
+- Default auth token (`Waguri`) is placeholder — set `AUTH_TOKEN` in production.
+- Device tokens **consumed + deleted** after use — re-run collector to replenish (each captcha tries up to 5 tokens).
+- `--verbose` controls only captcha subsystem logging; standard bridge/SSE gated by `LOG_LEVEL=debug`.
+- Each request gets fresh `chat_id` — no server-side persistence; chat deleted right after response completes.
 
 ---
 
 ## License
 
-Provided under MIT License. Use responsibly and in accordance with Z.AI's terms of service.
+MIT License. Use responsibly and in accordance with Z.AI's terms of service.
