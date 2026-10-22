@@ -35,9 +35,6 @@ import (
 // captchaSDKURL is the Aliyun captcha front-end bundle.
 const captchaSDKURL = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"
 
-// deviceServiceURL is the FeiLin device service that issues the session.
-const deviceServiceURL = "https://cloudauth-device-dualstack.ap-southeast-1.aliyuncs.com"
-
 // bootCaptchaJS boots the captcha SDK inside the page and returns one genuine
 // device token.  It mirrors what the SDK does on a real Z.AI page: the SDK
 // registers the device (Log1), initialises the challenge (InitCaptchaV3) and
@@ -107,7 +104,6 @@ const bootCaptchaJS = `(async () => {
 type harvestResult struct {
 	Session  deviceSession
 	Template *payloadTemplate
-	Token    string
 }
 
 // harvestSession performs the one-off browser visit.
@@ -121,7 +117,7 @@ type harvestResult struct {
 //
 // The caller closes the browser afterwards; nothing else is needed from it.
 func harvestSession(browser playwright.Browser) (*harvestResult, error) {
-	ctx, page, err := newWorkerPage(browser)
+	ctx, page, err := newHarvestPage(browser)
 	if err != nil {
 		return nil, fmt.Errorf("create page: %w", err)
 	}
@@ -129,10 +125,7 @@ func harvestSession(browser playwright.Browser) (*harvestResult, error) {
 
 	// Capture the device service's Log1 response - it carries the DeviceConfig
 	// with the trusted session.
-	var log1Mu chan struct{}
 	log1Ch := make(chan string, 4)
-	log1Mu = nil
-	_ = log1Mu
 	page.On("response", func(r playwright.Response) {
 		if !strings.Contains(r.URL(), "cloudauth-device-dualstack") {
 			return
@@ -224,10 +217,15 @@ func harvestSession(browser playwright.Browser) (*harvestResult, error) {
 		}
 	}
 
-	return &harvestResult{Session: session, Template: tpl, Token: token}, nil
+	return &harvestResult{Session: session, Template: tpl}, nil
 }
 
 // ---------- session minting manager ----------
+
+// MaxHarvestAttempts is how often the one-off browser visit is retried.
+// The harvest is the only network-bound step, so it is the only one worth
+// retrying; minting itself is pure computation and cannot fail transiently.
+const MaxHarvestAttempts = 3
 
 // sessionMinter turns ONE brief browser visit into many device tokens.
 //
@@ -263,6 +261,9 @@ func (m *sessionMinter) ensure(maxAge time.Duration) error {
 		m.session.SessionID, m.session.SessionKey, len(h.Template.fields))
 	return nil
 }
+
+// reset drops the current session so the next ensure() re-harvests it.
+func (m *sessionMinter) reset() { m.session.SessionID = "" }
 
 // mint produces n fresh device tokens bound to the current session.
 func (m *sessionMinter) mint(n int) ([]string, error) {

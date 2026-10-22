@@ -21,6 +21,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/md5"
@@ -49,9 +50,6 @@ const (
 	// regionPrefix is the tF field for the ap-southeast endpoints.
 	regionPrefix = "SG_WEB"
 
-	// appKey identifies the Z.AI captcha application.
-	appKey = "3795d28242a11619bc25f786f84e53d4"
-
 	// sceneID is the Z.AI captcha scene.
 	sceneID = "didk33e0"
 )
@@ -69,7 +67,7 @@ func aesCBCEncrypt(key, plaintext []byte) ([]byte, error) {
 	padLen := aes.BlockSize - len(plaintext)%aes.BlockSize
 	padded := make([]byte, 0, len(plaintext)+padLen)
 	padded = append(padded, plaintext...)
-	padded = append(padded, bytesRepeat(byte(padLen), padLen)...)
+	padded = append(padded, bytes.Repeat([]byte{byte(padLen)}, padLen)...)
 	out := make([]byte, len(padded))
 	cipher.NewCBCEncrypter(block, []byte(aesIV)).CryptBlocks(out, padded)
 	return out, nil
@@ -99,14 +97,6 @@ func aesCBCDecrypt(key, ciphertext []byte) ([]byte, error) {
 		}
 	}
 	return out[:len(out)-padLen], nil
-}
-
-func bytesRepeat(b byte, n int) []byte {
-	out := make([]byte, n)
-	for i := range out {
-		out[i] = b
-	}
-	return out
 }
 
 // encryptB64 encrypts with AES-128-CBC and returns base64.

@@ -464,26 +464,20 @@ The browser is needed **once per session, not once per token** — a single sess
 ```bash
 go build -ldflags="-s -w" -trimpath -o token-collector ./cmd/token-collector   # portable
 # modern CPUs, fully static: CGO_ENABLED=0 GOAMD64=v3 go build -ldflags="-s -w" -trimpath -o token-collector ./cmd/token-collector
-./token-collector                        # interactive TUI prompts
-./token-collector --tokens 750 --batch 3 # specific configuration
-./token-collector --parallel 3          # parallel workers, one browser
+./token-collector                        # interactive TUI prompt
+./token-collector --tokens 750          # mint a specific number of tokens
 xvfb-run -a ./token-collector           # headless server: a virtual display is enough
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--unsafe` | `false` | Raise limits: tokens 1500, batches 25, parallel 5 |
-| `--tokens` | `0` | Tokens per batch (0 = prompt; default 850, max 1500) |
-| `--batch` | `0` | Batches (0 = prompt; default 5, max 9 / 25 unsafe) |
-| `--parallel` | `0` | Parallel workers on one browser (0 = prompt; max 3 / 5 unsafe) |
-| `--headed` | `true` | Show the browser window (keep it on — headless sessions are rejected) |
-| `--headless` | `false` | Force headless — the minted tokens will **not** verify (diagnostics only) |
+| `--tokens` | `0` | Device tokens to mint (0 = prompt; default 850, max 1500) |
+| `--headed` | `true` | Deprecated and ignored — the browser always runs headful (headless sessions are rejected) |
 | `--session-max-age` | `15m` | Re-harvest the device session after this long (it has a server-side lifetime) |
 | `--export-session` | *(empty)* | Write the harvested session + payload template as JSON (consumable by `.assets/scripts/live_validate.py --session-mint`) |
-| `--block-trackers` | `false` | URL allowlist blocking tracker/analytics requests |
 | `--no-tui` | `false` | Plain text output |
 
-Implementation: pure-Go SQLite (WAL, 64 MB page cache, 256 MB mmap); one browser visit per session, tokens minted in Go; `GOGC=200`; lock-free atomics for abort/total; TUI ring buffer (1000 lines, scroll ↑/↓ g/G); allowlist permits only `chat.z.ai`, z-cdn assets, Aliyun captcha scripts, and `cloudauth-device`.
+Implementation: pure-Go SQLite (WAL, 64 MB page cache, 256 MB mmap); one browser visit per session, tokens minted in Go; TUI ring buffer (1000 lines, scroll ↑/↓ g/G).  Because minting is pure computation there is nothing to batch or parallelise: one harvested session yields the whole pool, and the only network-bound step (the harvest itself) is retried up to 3 times.
 
 Cross-checks: `go test ./cmd/token-collector/` replays the archived golden vectors (the `DeviceConfig` decrypt and a byte-exact token re-seal), and `.assets/scripts/live_validate.py --session-mint N --session <collector export>` re-mints and re-verifies the collector's own session against the live service.
 

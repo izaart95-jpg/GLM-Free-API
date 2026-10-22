@@ -34,8 +34,7 @@
 //
 //	CREATE TABLE tokens (
 //	    id    INTEGER PRIMARY KEY AUTOINCREMENT,
-//	    token TEXT    NOT NULL,
-//	    batch INTEGER NOT NULL
+//	    token TEXT    NOT NULL
 //	);
 
 package zbridge

@@ -3,7 +3,7 @@
 // Standalone binary that seeds tokens.sqlite with device tokens for the
 // Z.AI bridge.
 //
-// HOW IT WORKS NOW (2026-10-21 rewrite)
+// HOW IT WORKS (2026-10-21 rewrite)
 //
 //	The browser is used exactly ONCE, briefly.  It boots the Aliyun-SAF captcha
 //	SDK on chat.z.ai so the FeiLin device service issues this device a
@@ -13,6 +13,9 @@
 //	Every device token is then minted in-process: the payload is refreshed
 //	(per-session timestamps + the trailing probe-log entries), AES-128-CBC
 //	sealed with the session key and assembled into the 5-field token.
+//
+//	Minting is pure computation, so there is nothing to batch, parallelise or
+//	retry per token: one harvested session yields as many tokens as asked for.
 //
 //	Why the browser cannot be dropped: the risk layer trusts a device session
 //	only when the Log1 that created it came from a client it accepts as a real
@@ -32,10 +35,8 @@
 //     go build -ldflags="-s -w" -trimpath -o token-collector ./cmd/token-collector
 //
 // Usage:
-//   ./token-collector                  # interactive prompts
-//   ./token-collector --unsafe         # 1500 tokens, 25 batches max
-//   ./token-collector --tokens 750 --batch 3
-//   ./token-collector --headed         # visible browser for debugging
+//   ./token-collector                  # interactive prompt
+//   ./token-collector --tokens 750
 //   ./token-collector --session-max-age 30m   # reuse the session longer
 
 package main
@@ -47,8 +48,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,36 +62,17 @@ import (
 
 // ---------- Configuration ----------
 const (
-	MaxTokens       = 1500
-	UnsafeMaxTokens = 1500
-	DefaultTokens   = 850
-	DefaultBatch    = 5
-	MaxBatch        = 9
-	UnsafeMaxBatch  = 25
-	MaxRetries      = 3
-	URL             = "https://chat.z.ai"
-
-	// Parallel workers = parallel PAGES on a single browser (not parallel browsers)
-	MaxParallel       = 3
-	UnsafeMaxParallel = 5
-
-	// Stealth identity — keep these coherent with each other AND with the
-	// region of your egress IP. If you proxy through Tokyo, switch to
-	// Asia/Tokyo + ja-JP and a matching Accept-Language.
-	StealthTimezone = "America/New_York"
-	StealthLocale   = "en-US"
+	MaxTokens     = 1500
+	DefaultTokens = 850
+	URL           = "https://chat.z.ai"
 )
 
 // ---------- Flags ----------
 var (
-	unsafeFlag = flag.Bool("unsafe", false, "increase token limit to 1500 and batch limit to 25")
-	tokensFlag = flag.Int("tokens", 0, "tokens per batch (0 = prompt)")
-	batchFlag  = flag.Int("batch", 0, "number of batches (0 = prompt)")
+	tokensFlag = flag.Int("tokens", 0, "number of device tokens to mint (0 = prompt)")
 	headedFlag = flag.Bool("headed", true,
-		"show the browser window (default; headless device sessions are rejected "+
-			"by the Aliyun risk layer, so headless tokens do not verify)")
-	parallelFlag      = flag.Int("parallel", 0, "parallel workers (pages) on a single browser; 0 = prompt y/N")
-	blockTrackersFlag = flag.Bool("block-trackers", false, "enable URL allowlist filter to block trackers (off by default)")
+		"deprecated: the browser must run headful (headless device sessions are "+
+			"rejected by the Aliyun risk layer), so the flag is ignored")
 	noTUIFlag         = flag.Bool("no-tui", false, "disable TUI, use plain text output")
 	exportSessionFlag = flag.String("export-session", "",
 		"write the harvested device session + genuine payload template to this JSON file "+
@@ -100,18 +80,7 @@ var (
 	sessionMaxAgeFlag = flag.Duration("session-max-age", 15*time.Minute,
 		"how long a harvested device session may be reused before the browser is used again "+
 			"(the device session has a server side lifetime; live traffic measured >= 35 min)")
-	headlessFlag = flag.Bool("headless", false,
-		"force the browser headless (NOT recommended: the Aliyun risk layer rejects "+
-			"headless device sessions, so the minted tokens will not verify)")
 )
-
-// ---------- init: tune GC for throughput ----------
-// Default Go GC runs at 100% (doubles heap before collecting).
-// Bumping to 200% lets the heap grow 3× before collecting, cutting GC
-// pauses by ~half in allocation-heavy workloads like token collection.
-func init() {
-	debug.SetGCPercent(200)
-}
 
 // ---------- TUI (Bubble Tea) ----------
 var spinnerChars = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -144,12 +113,7 @@ func (lc *logCapture) Lines() []string {
 var (
 	tuiLogCapture      = &logCapture{maxLen: 1000}
 	tuiStatus          atomic.Value // string
-	tuiBatchesDone     atomic.Int64
 	tuiTokensCollected atomic.Int64
-	tuiTotalBatches    atomic.Int64
-	tuiTokensPerBatch  atomic.Int64
-	tuiWorkers         atomic.Int64
-	tuiParallel        atomic.Bool
 	tuiStartTime       atomic.Value // time.Time
 	tuiDone            atomic.Bool
 	tuiErr             atomic.Value // error
@@ -229,18 +193,13 @@ func (m tuiModel) View() string {
 	stAcc := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
 	stWarn := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
 	stDim := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	stBar := lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
 
 	// Gather state from atomics (lock-free)
 	status := "Initializing..."
 	if v := tuiStatus.Load(); v != nil {
 		status = v.(string)
 	}
-	bd := tuiBatchesDone.Load()
-	tb := tuiTotalBatches.Load()
 	tc := tuiTokensCollected.Load()
-	tpb := tuiTokensPerBatch.Load()
-	wk := tuiWorkers.Load()
 
 	var st time.Time
 	if v := tuiStartTime.Load(); v != nil {
@@ -265,30 +224,10 @@ func (m tuiModel) View() string {
 	}
 	hdr.WriteByte('\n')
 
-	// Progress bar
-	if tb > 0 {
-		pct := float64(bd) / float64(tb)
-		bw := 20
-		f := int(pct * float64(bw))
-		if f > bw {
-			f = bw
-		}
-		bar := stBar.Render(strings.Repeat("█", f)) + stDim.Render(strings.Repeat("░", bw-f))
-		hdr.WriteString(fmt.Sprintf("%s %s  %s\n",
-			stLabel.Render("Progress:"),
-			bar,
-			stAcc.Render(fmt.Sprintf("%d/%d (%.0f%%)", bd, tb, pct*100))))
-	}
-
 	// Stats line
-	target := tb * tpb
-	stats := fmt.Sprintf("%s %s / %s",
+	stats := fmt.Sprintf("%s %s",
 		stLabel.Render("Tokens:"),
-		stAcc.Render(fmt.Sprintf("%d", tc)),
-		stDim.Render(fmt.Sprintf("%d", target)))
-	if wk > 1 {
-		stats += fmt.Sprintf("  %s %s", stLabel.Render("Workers:"), stAcc.Render(fmt.Sprintf("%d", wk)))
-	}
+		stAcc.Render(fmt.Sprintf("%d", tc)))
 	stats += fmt.Sprintf("  %s %s", stLabel.Render("Elapsed:"), stAcc.Render(elapsed.String()))
 	hdr.WriteString(stats)
 	hdr.WriteByte('\n')
@@ -334,9 +273,6 @@ func (m tuiModel) View() string {
 
 // ---------- End TUI ----------
 
-// ---------- Fast sleep ----------
-func sleep(ms int) { time.Sleep(time.Duration(ms) * time.Millisecond) }
-
 // ---------- Prompt user for integer ----------
 func promptInt(reader *bufio.Reader, prompt string, def, max int) int {
 	fmt.Print(prompt)
@@ -358,20 +294,6 @@ func promptInt(reader *bufio.Reader, prompt string, def, max int) int {
 		return max
 	}
 	return n
-}
-
-// ---------- Prompt user for y/N ----------
-func promptBool(reader *bufio.Reader, prompt string, def bool) bool {
-	fmt.Print(prompt)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return def
-	}
-	line = strings.TrimSpace(strings.ToLower(line))
-	if line == "" {
-		return def
-	}
-	return line == "y" || line == "yes"
 }
 
 // ---------- Persistent SQLite store with tuned PRAGMAs ----------
@@ -410,21 +332,17 @@ func openTokenStore(dbPath string) (*tokenStore, error) {
 		return nil, err
 	}
 
+	// The bridge consumes the rows FIFO ("SELECT token FROM tokens ORDER BY id
+	// LIMIT 1") and deletes them after use; no other column is read.
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS tokens (
         id    INTEGER PRIMARY KEY AUTOINCREMENT,
-        token TEXT    NOT NULL,
-        batch INTEGER NOT NULL
+        token TEXT    NOT NULL
     )`); err != nil {
 		db.Close()
 		return nil, err
 	}
-	// Index for fast batch lookups
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tokens_batch ON tokens(batch)`); err != nil {
-		db.Close()
-		return nil, err
-	}
 
-	stmt, err := db.Prepare(`INSERT INTO tokens (token, batch) VALUES (?, ?)`)
+	stmt, err := db.Prepare(`INSERT INTO tokens (token) VALUES (?)`)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -432,7 +350,7 @@ func openTokenStore(dbPath string) (*tokenStore, error) {
 	return &tokenStore{db: db, stmt: stmt}, nil
 }
 
-func (ts *tokenStore) merge(batchNum int, tokens []string) error {
+func (ts *tokenStore) add(tokens []string) error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -448,7 +366,7 @@ func (ts *tokenStore) merge(batchNum int, tokens []string) error {
 	defer txStmt.Close()
 
 	for _, tok := range tokens {
-		if _, err := txStmt.Exec(tok, batchNum); err != nil {
+		if _, err := txStmt.Exec(tok); err != nil {
 			return err
 		}
 	}
@@ -460,384 +378,45 @@ func (ts *tokenStore) close() {
 	ts.db.Close()
 }
 
-// =====================================================================
-// STEALTH LAYER — make headless Chromium indistinguishable from a real
-// interactive Chrome running on a desktop.
-// =====================================================================
-
-// stealthChromeMajor resolves the bundled Chromium's major version once
-// so the spoofed UA / userAgentData match the REAL engine version
-// (a Chrome/131 UA on a Chromium/140 engine is itself a mismatch flag).
-var (
-	stealthVersionOnce sync.Once
-	stealthMajor       string
-)
-
-func stealthChromeMajor(browser playwright.Browser) string {
-	stealthVersionOnce.Do(func() {
-		v := browser.Version()
-		if i := strings.IndexByte(v, '.'); i > 0 {
-			stealthMajor = v[:i]
-		}
-		if stealthMajor == "" {
-			stealthMajor = "131"
-		}
-		fmt.Printf("🥷 Stealth identity: Chrome/%s on Windows 10 (x64)\n", stealthMajor)
-	})
-	return stealthMajor
+// ---------- Open the one-off harvest page ----------
+// The harvest is a single visit: open chat.z.ai (so the page origin, referrer
+// and TLS session look like a real visit) and let the captcha SDK register the
+// device.  There is no fingerprint spoofing and no tracker filtering — the
+// risk layer judges the client, not the UA, and the page is loaded once.
+func newHarvestPage(browser playwright.Browser) (playwright.BrowserContext, playwright.Page, error) {
+	ctx, err := browser.NewContext(playwright.BrowserNewContextOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	page, err := ctx.NewPage()
+	if err != nil {
+		_ = ctx.Close()
+		return nil, nil, err
+	}
+	return ctx, page, nil
 }
 
-func stealthUserAgent(major string) string {
-	// Identical to a real headed Chrome on Windows 10 — no "HeadlessChrome".
-	return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36"
-}
-
-// stealthJSTemplate is injected via AddInitScript — it runs BEFORE any page
-// script (including captcha SDKs) on every document and every frame.
-// __VER__ is replaced with the real Chromium major version at runtime.
+// ---------- Mint the tokens ----------
 //
-// Coverage:
-//  1. navigator.webdriver        → false (prototype-level)
-//  2. languages / language       → en-US
-//  3. platform                   → Win32 (coherent with the UA)
-//  4. hardwareConcurrency / deviceMemory
-//  5. plugins / mimeTypes        → exact replica of real Chrome's
-//     5 built-in PDF plugins
-//  6. window.chrome              → runtime/app/loadTimes/csi objects
-//  7. permissions.query          → notifications report 'default'
-//  8. WebGL vendor/renderer      → ANGLE/Intel D3D11, not SwiftShader
-//  9. userAgentData              → real Chrome brands, no HeadlessChrome
-//  10. window/screen geometry     → coherent 2560×1440 display
-//  11. iframe contentWindow       → chrome object present cross-frame
-//  12. Notification.permission
-//  13. Function.prototype.toString → every override above reports
-//     "[native code]" (anti-tamper mask)
-const stealthJSTemplate = `(function () {
-    'use strict';
-
-    var patched = [];
-    function track(fn) { patched.push(fn); return fn; }
-
-    var ua = navigator.userAgent || '';
-    var isWin = ua.indexOf('Windows NT') !== -1;
-    var isMac = ua.indexOf('Macintosh') !== -1;
-    var platOS = isWin ? 'Windows' : (isMac ? 'macOS' : 'Linux');
-    var platNav = isWin ? 'Win32' : (isMac ? 'MacIntel' : 'Linux x86_64');
-
-    // 1) navigator.webdriver → false (matches normal, non-automated Chrome)
-    try {
-        Object.defineProperty(Navigator.prototype, 'webdriver', {
-            get: track(function webdriver() { return false; }),
-            configurable: true,
-        });
-    } catch (e) {}
-
-    // 2) language / languages
-    try {
-        Object.defineProperty(Navigator.prototype, 'languages', {
-            get: track(function languages() { return ['en-US', 'en']; }),
-            configurable: true,
-        });
-        Object.defineProperty(Navigator.prototype, 'language', {
-            get: track(function language() { return 'en-US'; }),
-            configurable: true,
-        });
-    } catch (e) {}
-
-    // 3) platform — must agree with the UA's OS token
-    try {
-        Object.defineProperty(Navigator.prototype, 'platform', {
-            get: track(function platform() { return platNav; }),
-            configurable: true,
-        });
-    } catch (e) {}
-
-    // 4) CPU / memory
-    try {
-        Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {
-            get: track(function hardwareConcurrency() { return 8; }),
-            configurable: true,
-        });
-        if (!('deviceMemory' in navigator)) {
-            Object.defineProperty(Navigator.prototype, 'deviceMemory', {
-                get: track(function deviceMemory() { return 8; }),
-                configurable: true,
-            });
-        }
-    } catch (e) {}
-
-    // 5) plugins / mimeTypes — replicate a real Chrome install exactly
-    try {
-        var names = ['PDF Viewer', 'Chrome PDF Viewer', 'Chromium PDF Viewer',
-                     'Microsoft Edge PDF Viewer', 'WebKit built-in PDF'];
-        var file = 'internal-pdf-viewer';
-        var desc = 'Portable Document Format';
-        var mimeDefs = [
-            { type: 'application/pdf', suffixes: 'pdf' },
-            { type: 'text/pdf', suffixes: 'pdf' },
-        ];
-        var plugins = [];
-        names.forEach(function (n) {
-            var plugin = Object.create(Plugin.prototype);
-            var mimes = mimeDefs.map(function (m) {
-                var mt = Object.create(MimeType.prototype);
-                Object.defineProperties(mt, {
-                    type: { value: m.type, enumerable: true },
-                    suffixes: { value: m.suffixes, enumerable: true },
-                    description: { value: desc, enumerable: true },
-                    enabledPlugin: { value: plugin, enumerable: true },
-                });
-                return mt;
-            });
-            Object.defineProperties(plugin, {
-                name: { value: n, enumerable: true },
-                filename: { value: file, enumerable: true },
-                description: { value: desc, enumerable: true },
-                length: { value: mimes.length, enumerable: true },
-            });
-            mimes.forEach(function (m, i) {
-                Object.defineProperty(plugin, String(i), { value: m, enumerable: true });
-            });
-            plugin.item = track(function item(i) { return mimes[i] || null; });
-            plugin.namedItem = track(function namedItem(nm) {
-                for (var i = 0; i < mimes.length; i++) { if (mimes[i].type === nm) return mimes[i]; }
-                return null;
-            });
-            plugins.push(plugin);
-        });
-        var pa = Object.create(PluginArray.prototype);
-        Object.defineProperty(pa, 'length', { value: plugins.length, enumerable: true });
-        plugins.forEach(function (p, i) {
-            Object.defineProperty(pa, String(i), { value: p, enumerable: true });
-        });
-        pa.item = track(function item(i) { return plugins[i] || null; });
-        pa.namedItem = track(function namedItem(nm) {
-            for (var i = 0; i < plugins.length; i++) { if (plugins[i].name === nm) return plugins[i]; }
-            return null;
-        });
-        pa.refresh = track(function refresh() {});
-        Object.defineProperty(Navigator.prototype, 'plugins', {
-            get: track(function plugins() { return pa; }),
-            configurable: true,
-        });
-
-        var navMimes = [plugins[0][0], plugins[0][1]];
-        var ma = Object.create(MimeTypeArray.prototype);
-        Object.defineProperty(ma, 'length', { value: navMimes.length, enumerable: true });
-        navMimes.forEach(function (m, i) {
-            Object.defineProperty(ma, String(i), { value: m, enumerable: true });
-        });
-        ma.item = track(function item(i) { return navMimes[i] || null; });
-        ma.namedItem = track(function namedItem(nm) {
-            for (var i = 0; i < navMimes.length; i++) { if (navMimes[i].type === nm) return navMimes[i]; }
-            return null;
-        });
-        Object.defineProperty(Navigator.prototype, 'mimeTypes', {
-            get: track(function mimeTypes() { return ma; }),
-            configurable: true,
-        });
-    } catch (e) {}
-
-    // 6) window.chrome — absent in headless, present in every real Chrome
-    try {
-        if (!window.chrome) { window.chrome = {}; }
-        if (!window.chrome.runtime) {
-            window.chrome.runtime = {
-                PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux', OPENBSD: 'openbsd' },
-                PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64', MIPS: 'mips', MIPS64: 'mips64' },
-                connect: track(function connect() { return undefined; }),
-                sendMessage: track(function sendMessage() { return undefined; }),
-            };
-        }
-        if (!window.chrome.app) {
-            window.chrome.app = {
-                isInstalled: false,
-                InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
-                RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
-                getDetails: track(function getDetails() { return null; }),
-                getIsInstalled: track(function getIsInstalled() { return false; }),
-                installState: track(function installState(cb) {
-                    if (typeof cb === 'function') { cb('not_installed'); }
-                }),
-            };
-        }
-        if (!window.chrome.loadTimes) {
-            window.chrome.loadTimes = track(function loadTimes() {
-                var t = Date.now() / 1000;
-                return {
-                    requestTime: t, startLoadTime: t, commitLoadTime: t,
-                    finishDocumentLoadTime: t, finishLoadTime: t, firstPaintTime: t,
-                    firstPaintAfterLoadTime: 0, navigationType: 'Other',
-                    wasFetchedViaSpdy: false, wasNpnNegotiated: true,
-                    npnNegotiatedProtocol: 'h2', wasAlternateProtocolAvailable: false,
-                    connectionInfo: 'h2',
-                };
-            });
-        }
-        if (!window.chrome.csi) {
-            window.chrome.csi = track(function csi() {
-                return { startE: Date.now(), onloadT: Date.now(), pageT: 10, tran: 15 };
-            });
-        }
-    } catch (e) {}
-
-    // 7) permissions.query — headless reports 'denied' for notifications
-    try {
-        if (window.navigator.permissions && window.navigator.permissions.query) {
-            var oq = window.navigator.permissions.query.bind(window.navigator.permissions);
-            window.navigator.permissions.query = track(function query(p) {
-                if (p && p.name === 'notifications') {
-                    return Promise.resolve({ state: 'default', onchange: null });
-                }
-                return oq(p);
-            });
-        }
-    } catch (e) {}
-
-    // 8) WebGL — headless leaks SwiftShader; fake a plausible GPU stack
-    try {
-        var vendor = isWin ? 'Google Inc. (Intel)' : (isMac ? 'Google Inc. (Apple)' : 'Google Inc. (Intel)');
-        var renderer = isWin
-            ? 'ANGLE (Intel, Intel(R) UHD Graphics 630 (D3D11), D3D11)'
-            : (isMac
-                ? 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)'
-                : 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630 (CFL GT2), OpenGL 4.6)');
-        function patchGet(proto) {
-            var orig = proto.getParameter;
-            proto.getParameter = track(function getParameter(p) {
-                if (p === 37445) { return vendor; }
-                if (p === 37446) { return renderer; }
-                return orig.apply(this, arguments);
-            });
-        }
-        if (typeof WebGLRenderingContext !== 'undefined') { patchGet(WebGLRenderingContext.prototype); }
-        if (typeof WebGL2RenderingContext !== 'undefined') { patchGet(WebGL2RenderingContext.prototype); }
-    } catch (e) {}
-
-    // 9) userAgentData — headless leaks a 'HeadlessChrome' brand
-    try {
-        if (navigator.userAgentData) {
-            var uad = {
-                brands: [
-                    { brand: 'Chromium', version: '__VER__' },
-                    { brand: 'Google Chrome', version: '__VER__' },
-                    { brand: 'Not_A Brand', version: '24' },
-                ],
-                mobile: false,
-                platform: platOS,
-                getHighEntropyValues: track(function getHighEntropyValues(hints) {
-                    return Promise.resolve({
-                        architecture: 'x86',
-                        bitness: '64',
-                        model: '',
-                        platform: platOS,
-                        platformVersion: isWin ? '15.0.0' : (isMac ? '14.1.0' : '6.5.0'),
-                        uaFullVersion: '__VER__.0.0.0',
-                        fullVersionList: [
-                            { brand: 'Chromium', version: '__VER__.0.0.0' },
-                            { brand: 'Google Chrome', version: '__VER__.0.0.0' },
-                            { brand: 'Not_A Brand', version: '24.0.0.0' },
-                        ],
-                    });
-                }),
-            };
-            Object.defineProperty(Navigator.prototype, 'userAgentData', {
-                get: track(function userAgentData() { return uad; }),
-                configurable: true,
-            });
-        }
-    } catch (e) {}
-
-    // 10) window / screen geometry — headless reports a 0-sized outer window
-    try {
-        Object.defineProperty(window, 'outerWidth', {
-            get: track(function outerWidth() { return 1920; }), configurable: true,
-        });
-        Object.defineProperty(window, 'outerHeight', {
-            get: track(function outerHeight() { return 1160; }), configurable: true,
-        });
-        Object.defineProperty(Screen.prototype, 'width', {
-            get: track(function width() { return 2560; }), configurable: true,
-        });
-        Object.defineProperty(Screen.prototype, 'height', {
-            get: track(function height() { return 1440; }), configurable: true,
-        });
-        Object.defineProperty(Screen.prototype, 'availWidth', {
-            get: track(function availWidth() { return 2560; }), configurable: true,
-        });
-        Object.defineProperty(Screen.prototype, 'availHeight', {
-            get: track(function availHeight() { return 1400; }), configurable: true,
-        });
-        Object.defineProperty(Screen.prototype, 'colorDepth', {
-            get: track(function colorDepth() { return 24; }), configurable: true,
-        });
-        Object.defineProperty(Screen.prototype, 'pixelDepth', {
-            get: track(function pixelDepth() { return 24; }), configurable: true,
-        });
-    } catch (e) {}
-
-    // 11) iframes — captcha SDKs check contentWindow.chrome cross-frame
-    try {
-        var d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
-        if (d && d.get) {
-            var og = d.get;
-            Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
-                get: track(function contentWindow() {
-                    var w = og.call(this);
-                    try {
-                        if (w && !w.chrome && window.chrome) { w.chrome = window.chrome; }
-                    } catch (e) {}
-                    return w;
-                }),
-                configurable: true,
-            });
-        }
-    } catch (e) {}
-
-    // 12) Notification.permission
-    try {
-        if (typeof Notification !== 'undefined') {
-            Object.defineProperty(Notification, 'permission', {
-                get: track(function permission() { return 'default'; }),
-                configurable: true,
-            });
-        }
-    } catch (e) {}
-
-    // 13) toString mask — every function patched above must report
-    //     "[native code]" or the tampering itself becomes detectable.
-    try {
-        var origToString = Function.prototype.toString;
-        var toStringProxy = new Proxy(origToString, {
-            apply: function (target, thisArg, args) {
-                if (thisArg && patched.indexOf(thisArg) !== -1) {
-                    return 'function ' + (thisArg.name || '') + '() { [native code] }';
-                }
-                return Reflect.apply(target, thisArg, args);
-            },
-        });
-        patched.push(toStringProxy);
-        Function.prototype.toString = toStringProxy;
-    } catch (e) {}
-})();`
-
-// ---------- Collect tokens: one brief browser visit, then programmatic minting ----------
-//
-// The device session minted by the FeiLin device service is only "trusted"
-// when the Log1 request that created it came from a client the risk layer
-// accepts as a real browser, and once the device has uploaded its
-// fingerprint (Log2/Log3) for that session.  No pure HTTP client can satisfy
-// that, so the browser is used exactly once, briefly, to register the device
-// and to capture the genuine collector payload.  Every token is then minted
-// in-process (see feilin.go) - the browser is not consulted again.
-//
-// The one thing that still needs the browser is the session itself, and the
-// session has a server side lifetime, so it is re-harvested when it ages out
-// (--session-max-age, default 15 min; live traffic measured >= 35 min).
-func collectTokens(minter *sessionMinter, total int, maxAge time.Duration) ([]string, error) {
-	if err := minter.ensure(maxAge); err != nil {
+// The browser is consulted only for the session itself (harvest.go); every
+// token after that is produced in-process.  The harvest is the single flaky
+// step, so it is the only thing worth retrying.
+func mintDeviceTokens(minter *sessionMinter, total int, maxAge time.Duration) ([]string, error) {
+	var err error
+	for attempt := 1; attempt <= MaxHarvestAttempts; attempt++ {
+		if err = minter.ensure(maxAge); err == nil {
+			break
+		}
+		fmt.Printf("❌ Harvest attempt %d/%d failed: %v\n", attempt, MaxHarvestAttempts, err)
+		if attempt < MaxHarvestAttempts {
+			fmt.Println("♻️  Retrying the one-off browser visit...")
+			minter.reset()
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
+
 	tuiSetStatus(fmt.Sprintf("Minting %d device tokens...", total))
 	fmt.Printf("⚙️  Minting %d device tokens from the harvested session (no further browser use)...\n", total)
 	t0 := time.Now()
@@ -849,271 +428,30 @@ func collectTokens(minter *sessionMinter, total int, maxAge time.Duration) ([]st
 	return toks, nil
 }
 
-// ---------- Create a stealth worker page with a persistent identity ----------
-// Each worker gets its own BrowserContext carrying a coherent fingerprint
-// (UA / locale / timezone / viewport / screen) plus the stealth init script
-// injected into every frame BEFORE any page JavaScript runs. The optional
-// route allowlist is installed exactly once here, not per batch.
-func newWorkerPage(browser playwright.Browser) (playwright.BrowserContext, playwright.Page, error) {
-	major := stealthChromeMajor(browser)
-	ua := stealthUserAgent(major)
-	stealthJS := strings.ReplaceAll(stealthJSTemplate, "__VER__", major)
-
-	ctx, err := browser.NewContext(playwright.BrowserNewContextOptions{
-		UserAgent:         playwright.String(ua),
-		Locale:            playwright.String(StealthLocale),
-		TimezoneId:        playwright.String(StealthTimezone),
-		ColorScheme:       playwright.ColorSchemeLight,
-		DeviceScaleFactor: playwright.Float(1),
-		Viewport:          &playwright.Size{Width: 1920, Height: 1080},
-		Screen:            &playwright.Size{Width: 1920, Height: 1440},
-		ExtraHttpHeaders:  map[string]string{"Accept-Language": "en-US,en;q=0.9"},
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	page, err := ctx.NewPage()
-	if err != nil {
-		_ = ctx.Close()
-		return nil, nil, err
-	}
-
-	// Stealth init script — runs before any page JS on every frame,
-	// including captcha iframes.
-	if err := page.AddInitScript(playwright.Script{Content: playwright.String(stealthJS)}); err != nil {
-		_ = ctx.Close()
-		return nil, nil, fmt.Errorf("stealth init script: %w", err)
-	}
-
-	if *blockTrackersFlag {
-		if err := page.Route("**/*", func(route playwright.Route) {
-			if urlAllowed(route.Request().URL()) {
-				route.Continue()
-			} else {
-				route.Abort()
-			}
-		}); err != nil {
-			_ = ctx.Close()
-			return nil, nil, fmt.Errorf("route setup: %w", err)
-		}
-	}
-	return ctx, page, nil
-}
-
-// ---------- Run a single batch with retries ----------
-// The batch mints from the session the minter holds; the browser is only
-// revisited when the session has to be (re)harvested.
-func runBatch(minter *sessionMinter, total, batchNum int, maxAge time.Duration) ([]string, error) {
-	var lastErr error
-	for attempt := 1; attempt <= MaxRetries; attempt++ {
-		tuiSetStatus(fmt.Sprintf("Batch %d — attempt %d/%d", batchNum, attempt, MaxRetries))
-		fmt.Printf("\n🔄 [Batch %d] Attempt %d of %d\n", batchNum, attempt, MaxRetries)
-
-		tokens, err := collectTokens(minter, total, maxAge)
-
-		if err != nil {
-			lastErr = err
-			fmt.Printf("❌ Attempt %d failed: %v\n", attempt, err)
-			if attempt == MaxRetries {
-				fmt.Fprintln(os.Stderr, "🚫 All retries exhausted.")
-				break
-			}
-			fmt.Println("♻️  Retrying with a fresh device registration...")
-			minter.session.SessionID = "" // force a re-harvest on the next attempt
-			continue
-		}
-		return tokens, nil
-	}
-	return nil, fmt.Errorf("batch %d failed: %w", batchNum, lastErr)
-}
-
-// ---------- Run batches in PARALLEL using N pages on a single browser ----------
-// Uses lock-free atomics for the abort flag and running total — eliminates
-// two mutex lock/unlock pairs per batch that were pure overhead.
-func runParallel(browser playwright.Browser, tokenCount, batchCount, workers int, ts *tokenStore, dbPath string) (int, error) {
-	var (
-		aborted  atomic.Bool
-		totalCol atomic.Int64
-		wg       sync.WaitGroup
-		once     sync.Once
-		firstErr error
-	)
-
-	batchCh := make(chan int, batchCount)
-	for b := 1; b <= batchCount; b++ {
-		batchCh <- b
-	}
-	close(batchCh)
-
-	for w := 1; w <= workers; w++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			// Each worker owns ONE session (one browser visit) and mints all of
-			// its batches from it; the session is re-harvested only when it ages
-			// out.  The worker keeps no page open between harvests.
-			minter := &sessionMinter{browser: browser}
-			for batchNum := range batchCh {
-				// Lock-free check — no mutex contention.
-				if aborted.Load() {
-					return
-				}
-
-				fmt.Printf("\n👷 [Worker %d] starting batch %d\n", workerID, batchNum)
-
-				tokens, err := runBatch(minter, tokenCount, batchNum, *sessionMaxAgeFlag)
-				if err != nil {
-					once.Do(func() {
-						firstErr = err
-						aborted.Store(true)
-					})
-					return
-				}
-
-				dbErr := ts.merge(batchNum, tokens)
-				if dbErr != nil {
-					once.Do(func() {
-						firstErr = fmt.Errorf("database merge: %w", dbErr)
-						aborted.Store(true)
-					})
-					return
-				}
-
-				// Lock-free atomic add — no mutex.
-				cur := totalCol.Add(int64(len(tokens)))
-
-				tuiBatchesDone.Add(1)
-				tuiTokensCollected.Add(int64(len(tokens)))
-				fmt.Printf("✅ [Worker %d] batch %d done — %d tokens (running total: %d)\n",
-					workerID, batchNum, len(tokens), cur)
-			}
-		}(w)
-	}
-	wg.Wait()
-	return int(totalCol.Load()), firstErr
-}
-
-// ---------- Browser launch args for maximum throughput ----------
-// Disables background throttling, unnecessary services, and automation
-// detection — keeps the renderer hot and avoids IPC storms.
-var chromiumPerfArgs = []string{
-	"--disable-blink-features=AutomationControlled",
-	"--disable-background-timer-throttling",
-	"--disable-renderer-backgrounding",
-	"--disable-backgrounding-occluded-windows",
-	"--disable-ipc-flooding-protection",
-	"--disable-background-networking",
-	"--disable-default-apps",
-	"--disable-extensions",
-	"--disable-sync",
-	"--disable-translate",
-	"--disable-component-update",
-	"--disable-client-side-phishing-detection",
-	"--disable-hang-monitor",
-	"--disable-popup-blocking",
-	"--disable-prompt-on-repost",
-	"--disable-domain-reliability",
-	"--disable-features=Translate,MediaRouter,OptimizationHints",
-	"--no-first-run",
-	"--no-default-browser-check",
-	"--metrics-recording-only",
-	"--safebrowsing-disable-auto-update",
-	"--password-store=basic",
-	"--use-mock-keychain",
-	"--lang=en-US",
-}
-
-// ---------- Stealth browser launch ----------
+// ---------- Browser launch ----------
 //
 // The device session is only trusted when the risk layer accepts the CLIENT,
 // and it accepts the client by looking at the browser itself - not at the
 // request bytes (those are byte-identical to what we can send from Go) and
-// not at the UA string (the stealth script spoofs that too).  Measured live:
+// not at the UA string.  Measured live:
 //
 //	headful Chromium            -> session trusted   -> tokens verify (T001)
 //	headless Chromium (new)     -> session UNTRUSTED -> tokens fail (F001)
 //	any pure HTTP client        -> session UNTRUSTED -> tokens fail (F001)
 //
-// So the browser runs HEADED by default.  --headless still exists for
-// debugging, but the tokens it produces will not verify.
-//
-// --enable-automation is stripped from Playwright's default args so the
-// automation infobar flag never reaches the engine.
-func launchBrowser(pw *playwright.Playwright, headed bool) (playwright.Browser, error) {
-	base := append([]string{}, chromiumPerfArgs...)
-
-	if headed {
-		// Real visible window - the stealth script still applies.
-		return pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-			Headless:          playwright.Bool(false),
-			Args:              base,
-			IgnoreDefaultArgs: []string{"--enable-automation"},
-		})
-	}
-
-	args := append(base, "--headless=new", "--window-size=1920,1080")
-	b, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless:          playwright.Bool(false), // OUR flag controls headlessness
-		Args:              args,
-		IgnoreDefaultArgs: []string{"--enable-automation"},
-	})
-	if err == nil {
-		fmt.Fprintln(os.Stderr, "⚠️  Running headless: the Aliyun risk layer rejects headless device")
-		fmt.Fprintln(os.Stderr, "    sessions, so the minted tokens will NOT verify (F001).")
-		return b, nil
-	}
-
-	// Fallback for ancient Chromium builds that reject --headless=new:
-	// classic headless — the stealth script still patches the surface.
-	fmt.Fprintf(os.Stderr, "⚠️  --headless=new launch failed (%v); falling back to classic headless\n", err)
+// So the browser always runs HEADED.  --enable-automation is stripped from
+// Playwright's default args so the automation infobar flag never reaches the
+// engine.
+func launchBrowser(pw *playwright.Playwright) (playwright.Browser, error) {
 	return pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless:          playwright.Bool(true),
-		Args:              base,
+		Headless:          playwright.Bool(false),
+		Args:              []string{"--disable-blink-features=AutomationControlled"},
 		IgnoreDefaultArgs: []string{"--enable-automation"},
 	})
-}
-
-// ---------- Network allowlist (surgical URL filter) ----------
-// Pre-compiled regex patterns for wildcard rules only.
-// Simple prefix/exact rules use strings.HasPrefix / == (no regex overhead).
-var (
-	// https://z-cdn.chatglm.cn/z-ai/frontend/prod-fe-*/assets/index-*.js
-	reZCDN = regexp.MustCompile(`^https://z-cdn\.chatglm\.cn/z-ai/frontend/prod-fe-[^/]+/assets/index-[^/]+\.js$`)
-	// https://cloudauth-device-dualstack.*aliyuncs.com/
-	reCloudAuth = regexp.MustCompile(`^https://cloudauth-device-dualstack\.[^/]*aliyuncs\.com/`)
-	// https://g.alicdn.com/captcha-frontend/FeiLin/*/feilin*.*.js
-	reFeiLin = regexp.MustCompile(`^https://g\.alicdn\.com/captcha-frontend/FeiLin/[^/]+/feilin[^/]*\.[^/]*\.js$`)
-)
-
-// urlAllowed checks a URL against the allowlist.
-// Fast path: prefix checks via strings.HasPrefix (~5 ns each).
-// Slow path: regex only for wildcard patterns (3 of 5 rules).
-// Switch short-circuits on first match — most requests are decided
-// in O(prefix_length) without ever touching the regex engine.
-func urlAllowed(u string) bool {
-	switch {
-	// 1. Entire chat.z.ai domain — also allow wss:// for WebSocket upgrades
-	case strings.HasPrefix(u, "https://chat.z.ai/"), strings.HasPrefix(u, "wss://chat.z.ai/"):
-		return true
-	// 2. z-cdn build assets (prefix filter → regex confirm)
-	case strings.HasPrefix(u, "https://z-cdn.chatglm.cn/z-ai/frontend/prod-fe-"):
-		return reZCDN.MatchString(u)
-	// 3. Exact Aliyun captcha script (string equality, no regex)
-	case u == "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js":
-		return true
-	// 4. cloudauth-device-dualstack.*aliyuncs.com (prefix filter → regex confirm)
-	case strings.HasPrefix(u, "https://cloudauth-device-dualstack."):
-		return reCloudAuth.MatchString(u)
-	// 5. FeiLin captcha assets (prefix filter → regex confirm)
-	case strings.HasPrefix(u, "https://g.alicdn.com/captcha-frontend/FeiLin/"):
-		return reFeiLin.MatchString(u)
-	}
-	return false
 }
 
 // ---------- Core run logic ----------
-func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
+func run(tokenCount int) error {
 	// Install Playwright browsers (best-effort)
 	tuiSetStatus("Installing Playwright...")
 	fmt.Println("⏳ Ensuring Playwright Chromium browser is installed...")
@@ -1124,16 +462,13 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
 	}
 
 	tuiSetStatus("Launching browser...")
-	if !headed {
-		fmt.Println("🥷 Stealth mode: new-headless engine + real-Chrome fingerprint emulation + human input synthesis")
-	}
 	pw, err := playwright.Run()
 	if err != nil {
 		return fmt.Errorf("playwright run: %w", err)
 	}
 	defer pw.Stop()
 
-	browser, err := launchBrowser(pw, headed)
+	browser, err := launchBrowser(pw)
 	if err != nil {
 		return fmt.Errorf("browser launch: %w", err)
 	}
@@ -1152,58 +487,20 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
 	}
 	defer ts.close()
 
-	// ---------- Parallel path ----------
-	if parallelWorkers > 1 && batchCount > 1 {
-		tuiSetStatus(fmt.Sprintf("Parallel: %d workers", parallelWorkers))
-		fmt.Printf("\n🚀 PARALLEL mode: %d worker page(s) on a single browser\n", parallelWorkers)
-		totalCollected, err := runParallel(browser, tokenCount, batchCount, parallelWorkers, ts, dbPath)
-		if err != nil {
-			return err
-		}
-
-		fmt.Printf("\n══════════════════════════════════════════\n")
-		fmt.Printf("  ✅ ALL BATCHES COMPLETE (parallel: %d workers)\n", parallelWorkers)
-		fmt.Printf("  📦 %d batches × %d tokens = %d total collected\n",
-			batchCount, tokenCount, totalCollected)
-		if info, err := os.Stat(dbPath); err == nil {
-			fmt.Printf("  💾 %s (%.1f KB)\n", dbPath, float64(info.Size())/1024.0)
-		}
-		fmt.Printf("══════════════════════════════════════════\n")
-
-		return nil
-	}
-
-	// ---------- Sequential batch loop ----------
-	tuiSetStatus("Starting sequential batches...")
-	// ONE browser visit registers the device; every batch then mints from that
-	// session.  The session is re-harvested only when it ages past
+	// ONE browser visit registers the device; every token is then minted from
+	// that session.  The session is re-harvested only when it ages past
 	// --session-max-age.
 	minter := &sessionMinter{browser: browser}
 
-	totalCollected := 0
-	for b := 1; b <= batchCount; b++ {
-		fmt.Printf("\n══════════════════════════════════════════\n")
-		fmt.Printf("  BATCH %d of %d\n", b, batchCount)
-		fmt.Printf("══════════════════════════════════════════\n")
-
-		tokens, err := runBatch(minter, tokenCount, b, *sessionMaxAgeFlag)
-		if err != nil {
-			return err
-		}
-
-		if err := ts.merge(b, tokens); err != nil {
-			return fmt.Errorf("database merge: %w", err)
-		}
-
-		totalCollected += len(tokens)
-		tuiBatchesDone.Add(1)
-		tuiTokensCollected.Store(int64(totalCollected))
-
-		if info, err := os.Stat(dbPath); err == nil {
-			fmt.Printf("💾 Database: %s (%.1f KB) — %d tokens total across %d batch(es)\n",
-				dbPath, float64(info.Size())/1024.0, totalCollected, b)
-		}
+	tokens, err := mintDeviceTokens(minter, tokenCount, *sessionMaxAgeFlag)
+	if err != nil {
+		return err
 	}
+
+	if err := ts.add(tokens); err != nil {
+		return fmt.Errorf("database insert: %w", err)
+	}
+	tuiTokensCollected.Store(int64(len(tokens)))
 
 	if *exportSessionFlag != "" {
 		if err := minter.exportSession(*exportSessionFlag); err != nil {
@@ -1215,8 +512,8 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
 
 	// ---------- Final summary ----------
 	fmt.Printf("\n══════════════════════════════════════════\n")
-	fmt.Printf("  ✅ ALL BATCHES COMPLETE\n")
-	fmt.Printf("  📦 %d batches × %d tokens = %d total collected\n", batchCount, tokenCount, totalCollected)
+	fmt.Printf("  ✅ ALL TOKENS MINTED\n")
+	fmt.Printf("  📦 %d device tokens\n", len(tokens))
 	fmt.Printf("  🌐 %s\n", minter.stats())
 	if info, err := os.Stat(dbPath); err == nil {
 		fmt.Printf("  💾 %s (%.1f KB)\n", dbPath, float64(info.Size())/1024.0)
@@ -1230,13 +527,9 @@ func run(tokenCount, batchCount, parallelWorkers int, headed bool) error {
 func main() {
 	flag.Parse()
 
-	// Apply --unsafe limits
-	maxTokens := MaxTokens
-	maxBatch := MaxBatch
-	if *unsafeFlag {
-		maxTokens = UnsafeMaxTokens
-		maxBatch = UnsafeMaxBatch
-		fmt.Println("⚠️  --unsafe mode enabled: token limit=1500, batch limit=25")
+	if !*headedFlag {
+		fmt.Fprintln(os.Stderr, "⚠️  --headed=false is ignored: the Aliyun risk layer rejects")
+		fmt.Fprintln(os.Stderr, "    headless device sessions, so the tokens would not verify.")
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -1245,45 +538,14 @@ func main() {
 	tokenCount := *tokensFlag
 	if tokenCount <= 0 {
 		tokenCount = promptInt(reader,
-			fmt.Sprintf("How many tokens to collect per batch? [default: %d, max: %d] ", DefaultTokens, maxTokens),
-			DefaultTokens, maxTokens)
-	} else if tokenCount > maxTokens {
-		fmt.Printf("⚠️  Capping tokens to max %d.\n", maxTokens)
-		tokenCount = maxTokens
+			fmt.Sprintf("How many tokens to mint? [default: %d, max: %d] ", DefaultTokens, MaxTokens),
+			DefaultTokens, MaxTokens)
+	} else if tokenCount > MaxTokens {
+		fmt.Printf("⚠️  Capping tokens to max %d.\n", MaxTokens)
+		tokenCount = MaxTokens
 	}
 
-	// ---------- Prompt for batch count ----------
-	batchCount := *batchFlag
-	if batchCount <= 0 {
-		batchCount = promptInt(reader,
-			fmt.Sprintf("How many batches? [default: %d, max: %d] ", DefaultBatch, maxBatch),
-			DefaultBatch, maxBatch)
-	} else if batchCount > maxBatch {
-		fmt.Printf("⚠️  Capping batch to max %d.\n", maxBatch)
-		batchCount = maxBatch
-	}
-
-	// ---------- Prompt for parallel workers ----------
-	maxParallel := MaxParallel
-	if *unsafeFlag {
-		maxParallel = UnsafeMaxParallel
-	}
-
-	parallelWorkers := *parallelFlag
-	if parallelWorkers == 0 {
-		if promptBool(reader, "Enable parallel workers (parallel pages on one browser)? [y/N] ", false) {
-			parallelWorkers = promptInt(reader,
-				fmt.Sprintf("How many parallel workers? [default: %d, max: %d] ", maxParallel, maxParallel),
-				maxParallel, maxParallel)
-		}
-	} else if parallelWorkers < 0 {
-		parallelWorkers = 0
-	} else if parallelWorkers > maxParallel {
-		fmt.Printf("⚠️  Capping parallel workers to max %d.\n", maxParallel)
-		parallelWorkers = maxParallel
-	}
-
-	// ---------- TUI setup (before plan so plan shows in TUI logs) ----------
+	// ---------- TUI setup (before the plan so the plan shows in the TUI logs) ----------
 	useTUI := !*noTUIFlag
 	var origStdout, origStderr *os.File
 	var pipeWriter *os.File
@@ -1311,30 +573,18 @@ func main() {
 			}
 		}()
 
-		tuiTotalBatches.Store(int64(batchCount))
-		tuiTokensPerBatch.Store(int64(tokenCount))
-		wk := parallelWorkers
-		if wk < 1 {
-			wk = 1
-		}
-		tuiWorkers.Store(int64(wk))
-		tuiParallel.Store(parallelWorkers > 1)
 		tuiStartTime.Store(time.Now())
 		tuiStatus.Store("Starting...")
 	}
 
 	// ---------- Plan ----------
-	fmt.Printf("\n🎯 Plan: %d tokens × %d batches = %d total tokens",
-		tokenCount, batchCount, tokenCount*batchCount)
-	if parallelWorkers > 1 {
-		fmt.Printf("  (parallel: %d workers)", parallelWorkers)
-	}
+	fmt.Printf("\n🎯 Plan: mint %d device tokens", tokenCount)
 	fmt.Println()
 
 	// ---------- Run ----------
 	if !useTUI {
-		// Plain text mode — no TUI, original behaviour
-		if err := run(tokenCount, batchCount, parallelWorkers, *headedFlag && !*headlessFlag); err != nil {
+		// Plain text mode — no TUI
+		if err := run(tokenCount); err != nil {
 			fmt.Fprintf(os.Stderr, "\n🚫 Fatal error: %v\n", err)
 			os.Exit(1)
 		}
@@ -1351,7 +601,7 @@ func main() {
 	)
 
 	go func() {
-		err := run(tokenCount, batchCount, parallelWorkers, *headedFlag && !*headlessFlag)
+		err := run(tokenCount)
 		if err == nil {
 			tuiSetStatus("Complete!")
 		}
